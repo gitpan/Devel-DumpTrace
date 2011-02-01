@@ -1,0 +1,23 @@
+Revision history for Devel-DumpTrace
+
+0.06    2011-02-01
+        Rename distribution from Devel-XTrace to Devel-DumpTrace. Release candidate.
+
+0.05    2011-01-31
+        PPI fixes. Added smoke tests. 
+        PPI detects when implicit $_,@_,@ARGV should be inserted.
+
+0.04    2010-11-30
+        Initial PPI implementation.
+        Rename $LEVEL to $TRACE and aliased to $Devel::Trace::TRACE.
+
+0.03    2010-11-26
+        Implement output reduction strategies and $LEVEL verbosity level var.
+
+0.02    2010-11-15
+        Remove some of those limitations from v0.01.
+        - Handle package vars
+        - Handle special vars $ARGV, %SIG, $1, etc.
+
+0.01    2010-11-05
+        Initial version. Many "BUGS AND LIMITATIONS"
