@@ -36,14 +36,21 @@ for $w (@w) {
   }
 }
 
-# should be 1, but returns 2. Why?
+# for $w := 'lazy', the return value is 5 but it should be 4.
+# Why did this fail?
 # Let's debug it with Devel::DumpTrace
 
-BEGIN { $Devel::DumpTrace::LEVEL = 0 };
-#$Devel::DumpTrace::TRACE = $Devel::DumpTrace::LEVEL = 5;
-$Devel::Trace::TRACE = 5;
+BEGIN { $Devel::DumpTrace::TRACE = 0 };
+
+
+$Devel::DumpTrace::TRACE = 'verbose';
+  
 $ww = binary_search("lazy", @w);
 print "\$ww is $ww, should be 1.\n";
-$Devel::DumpTrace::LEVEL = 0;
+
+$Devel::DumpTrade::TRACE = 0;
+
+
+
 
 

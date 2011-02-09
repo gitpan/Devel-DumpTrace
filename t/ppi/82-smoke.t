@@ -36,8 +36,8 @@ EO_T;
 for my $level (1, 2, 3) {
 
   my $file = "$0.out.$level";
-  $ENV{XTRACE_FH} = $file;
-  $ENV{XTRACE_LEVEL} = $level;
+  $ENV{DUMPTRACE_FH} = $file;
+  $ENV{DUMPTRACE_LEVEL} = $level;
   my $c1 = system($^X, $dmodule, "-Iblib/lib", "-Ilib", "$0.pl");
   my $keep = 0;
 
@@ -65,8 +65,8 @@ my @xh4;
 for my $level (4, 5) {
 
   my $file = "$0.out.$level";
-  $ENV{XTRACE_FH} = $file;
-  $ENV{XTRACE_LEVEL} = $level;
+  $ENV{DUMPTRACE_FH} = $file;
+  $ENV{DUMPTRACE_LEVEL} = $level;
   my $c1 = system($^X, $dmodule, "-Iblib/lib", "-Ilib", "$0.pl");
   my $keep = 0;
 

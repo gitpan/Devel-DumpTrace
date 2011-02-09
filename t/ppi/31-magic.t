@@ -16,7 +16,7 @@ use POSIX ();
 
 Devel::DumpTrace::import_all();
 
-$Devel::DumpTrace::XTRACE_FH = *STDOUT;
+$Devel::DumpTrace::DUMPTRACE_FH = *STDOUT;
 
 my $status;
 system($^X, "-e", "exit 4");

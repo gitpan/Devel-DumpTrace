@@ -8,7 +8,10 @@ lib/littledemo.pl
 lib/multiline.pl
 lib/multilinedemo.pl
 lib/Devel/DumpTrace.pm
+lib/Devel/DumpTrace/CachedDisplayedArray.pm
+lib/Devel/DumpTrace/CachedDisplayedHash.pm
 lib/Devel/DumpTrace/PPI.pm
+lib/Devel/DumpTrace/noPPI.pm
 lib/Text/Shorten.pm
 t/00-load.t
 t/11-dump_scalar.t
@@ -22,6 +25,8 @@ t/24-substitute.t
 t/25-whitespace.t
 t/26-pkgvars.t
 t/30-english.t
+t/40-noppi.t
+t/41-noppi.t
 t/80-verbose.t
 t/81-smoke.t
 t/82-smoke.t

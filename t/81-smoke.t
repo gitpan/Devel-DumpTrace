@@ -2,7 +2,7 @@ use Test::More tests => 32;
 use strict;
 use warnings;
 
-my $dmodule = "-d:DumpTrace";
+my $dmodule = "-d:DumpTrace::noPPI";
 
 # check output of Devel::DumpTrace module, compare with reference output.
 
@@ -12,8 +12,8 @@ my $dmodule = "-d:DumpTrace";
 for my $level (1, 2, 3) {
 
   my $file = "$0.out.$level";
-  $ENV{XTRACE_FH} = $file;
-  $ENV{XTRACE_LEVEL} = $level;
+  $ENV{DUMPTRACE_FH} = $file;
+  $ENV{DUMPTRACE_LEVEL} = $level;
   my $c1 = system($^X, $dmodule, "-Iblib/lib", "-Ilib",
 		  "lib/demo.pl");
 
@@ -47,8 +47,8 @@ for my $level (1, 2, 3) {
 for my $level (4, 5) {
 
   my $file = "$0.out.$level";
-  $ENV{XTRACE_FH} = $file;
-  $ENV{XTRACE_LEVEL} = $level;
+  $ENV{DUMPTRACE_FH} = $file;
+  $ENV{DUMPTRACE_LEVEL} = $level;
   my $c1 = system($^X, $dmodule, "-Iblib/lib", "-Ilib",
 		  "lib/demo.pl");
   my $keep = 0;

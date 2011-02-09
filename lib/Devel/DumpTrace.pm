@@ -3,6 +3,8 @@ package Devel::DumpTrace;
 use PadWalker;
 use Scalar::Util;
 use Text::Shorten;
+use Devel::DumpTrace::CachedDisplayedArray;
+use Devel::DumpTrace::CachedDisplayedHash;
 use Carp;
 use strict;
 use warnings;
@@ -19,7 +21,7 @@ use constant ABBREV_NONE   => 2;  # no abbreviation
 use constant CALLER_PKG => 0;     # package name
 use constant CALLER_SUB => 3;     # current subroutine name
 
-our $VERSION = '0.06';
+our $VERSION = '0.07';
 our $ARRAY_ELEM_SEPARATOR = ',';
 our $HASH_ENTRY_SEPARATOR = ';';
 our $HASH_PAIR_SEPARATOR = '=>';
@@ -31,11 +33,13 @@ tie $TRACE, 'Devel::DumpTrace::VerboseLevel';
 $TRACE = 'default';
 
 my $pid = $$;
-our $XTRACE_FH = *STDERR;
+our $DUMPTRACE_FH = *STDERR;
 our $DB_ARGS_DEPTH = 3;
 our %EXCLUDE_PKG = ('Devel::DumpTrace' => 1, 
 		    'Text::Shorten' => 1,
-		    'Devel::DumpTrace::VerboseLevel' => 1,);
+		    'Devel::DumpTrace::VerboseLevel' => 1,
+		    'Devel::DumpTrace::CachedDisplayedHash' => 1,
+		    'Devel::DumpTrace::CachedDisplayedArray' => 1,);
 our %INCLUDE_PKG = ('main' => 1);
 
 my (@deferred, $deferred_pkg, $pad_my, $pad_our, @matches);
@@ -52,19 +56,19 @@ my %esc = ("\a" => '\a', "\b" => '\b', "\t" => '\t', "\n" => '\n',
 
 *DB::DB = *DB__DB unless defined &DB::DB;
 
-if (defined $ENV{XTRACE_FH}) {
-  if (uc $ENV{XTRACE_FH} eq 'STDOUT') {
-    $XTRACE_FH = *STDOUT;
+if (defined $ENV{DUMPTRACE_FH}) {
+  if (uc $ENV{DUMPTRACE_FH} eq 'STDOUT') {
+    $DUMPTRACE_FH = *STDOUT;
   } else {
     ## no critic (BriefOpen)
-    unless (open $XTRACE_FH, '>', $ENV{XTRACE_FH}) {
-      die "Can't use $ENV{XTRACE_FH} as trace output file: $!\n",
+    unless (open $DUMPTRACE_FH, '>', $ENV{DUMPTRACE_FH}) {
+      die "Can't use $ENV{DUMPTRACE_FH} as trace output file: $!\n",
 	"Devel::DumpTrace module is quitting.\n";
     }
   }
 }
-if (defined $ENV{XTRACE_LEVEL}) {
-  $TRACE = $ENV{XTRACE_LEVEL};
+if (defined $ENV{DUMPTRACE_LEVEL}) {
+  $TRACE = $ENV{DUMPTRACE_LEVEL};
 }
 
 END {
@@ -72,8 +76,8 @@ END {
     no warnings 'redefine';
     handle_deferred_output();
     *DB::DB = sub { };
-    if ($XTRACE_FH ne *STDERR && $XTRACE_FH ne *STDOUT) {
-      close $XTRACE_FH;
+    if ($DUMPTRACE_FH ne *STDERR && $DUMPTRACE_FH ne *STDOUT) {
+      close $DUMPTRACE_FH;
     }
   }
 }
@@ -118,7 +122,7 @@ sub _exclude_pkg {
 
   # exclude files from @_INC when _package_style() is 0
   foreach my $inc (@_INC) {
-    if ($inc =~ m{/} && index($file,$inc) == 0) {
+    if (index($inc,"/") >= 0 && index($file,$inc) == 0) {
       return $EXCLUDE_PKG{$file} = $EXCLUDE_PKG{$pkg} = 1;
     }
   }
@@ -154,9 +158,9 @@ sub _abbrev_style {
 	  ABBREV_NONE,)[$TRACE % 10]
 }
 
-#sub _display_style { (1,1,1,1,4,4,4,4,4,4)[$TRACE % 10] }
-#sub _abbrev_style  { (0,0,1,9,1,9,9,9,9,9)[$TRACE % 10] }
-sub _package_style { return $TRACE >= 100 }  # 100 
+sub _package_style {
+  return $TRACE >= 100;
+}
 
 sub save_pads {
   my $n = shift || 0;
@@ -170,12 +174,13 @@ sub evaluate_and_display_line {
   my $style = _display_style();
 
   if ($style > DISPLAY_TERSE) {
-    print {$XTRACE_FH} ">>    $f:$l:\n";    # [file & line]
-    print {$XTRACE_FH} ">>> \t\t $code";  # [orig]
+    print {$DUMPTRACE_FH} ">>    $f:$l:\n";    # [file & line]
+    print {$DUMPTRACE_FH} ">>> \t\t $code";  # [orig]
   }
 
   # look for assignment operator.
-  if ($code =~ m{[-+*/&|^.%]?=[^=>]}x || $code =~ m{[\b*&|/<>]{2}=\b}x) {
+  if ($code    =~ m{[-+*/&|^.%]?=[^=>]} 
+      || $code =~ m{[\b*&|/<>]{2}=\b}   ) {
 
     my ($expr1, $op, $expr2) = ($`, $&, $');
     if ($style < DISPLAY_GABBY) {
@@ -187,7 +192,7 @@ sub evaluate_and_display_line {
     $deferred_pkg = $p;
     if ("$expr1$expr2" ne $code) {
       if ($style >= DISPLAY_GABBY) {
-	print {$XTRACE_FH} ">>>> \t\t $expr1$expr2";  # [pre eval]
+	print {$DUMPTRACE_FH} ">>>> \t\t $expr1$expr2";  # [pre eval]
       }
     }
     if ($style <= DISPLAY_TERSE) {
@@ -200,11 +205,11 @@ sub evaluate_and_display_line {
 
   if ($style >= DISPLAY_GABBY) {
     if ($xcode ne $code) {
-      print {$XTRACE_FH} ">>>> \t\t $xcode";     # [pre eval]
+      print {$DUMPTRACE_FH} ">>>> \t\t $xcode";     # [pre eval]
     }
-    print {$XTRACE_FH} $SEPARATOR;
+    print {$DUMPTRACE_FH} $SEPARATOR;
   } elsif ($style == DISPLAY_TERSE) {
-    print {$XTRACE_FH} ">>>>  $f:$l:\t\t $xcode";
+    print {$DUMPTRACE_FH} ">>>>  $f:$l:\t\t $xcode";
   }
   return;
 }
@@ -290,45 +295,103 @@ sub _qquote {
 }
 
 sub hash_repr {
+  # XXX - magic numbers, type names
   my $hashref = shift;
+
   return '' if !defined $hashref;
   my $ref = ref $hashref && ref $hashref ne 'HASH'
     ? ref($hashref) . ': ' : '';
-  if (_abbrev_style() < ABBREV_NONE) {
-    my %hash = map { dump_scalar($_) =>
-		       dump_scalar($hashref->{$_}) } keys %{$hashref};
-    my @r = Text::Shorten::shorten_hash(
-			\%hash,
-		        _abbrev_style() > ABBREV_STRONG ? 79 : 19,
-			$HASH_ENTRY_SEPARATOR,
-			$HASH_PAIR_SEPARATOR );
+  my $maxlen = _abbrev_style() < ABBREV_NONE
+    ? _abbrev_style() > ABBREV_STRONG ? 79 : 19 : -1;
+  my $cache_key = join ':', 
+    $maxlen, $HASH_ENTRY_SEPARATOR, $HASH_PAIR_SEPARATOR;
+  my $hash;
 
-    return $ref . join $HASH_ENTRY_SEPARATOR,
-      map { join $HASH_PAIR_SEPARATOR, @{$_} } @r;
+  # When the hash table gets large, tie it to 
+  # Devel::DumpTrace::CachedDisplayedHash and
+  # see if we can avoid some expensive calls
+  # to  Text::Shorten::shorten_hash .
 
+  if (tied(%{$hashref})
+      && ref(tied %{$hashref}) eq 'Devel::DumpTrace::CachedDisplayedHash') {
+
+    my $result = (tied %{$hashref})->get_cache($cache_key);
+    if (defined $result) {
+      return $ref . join $HASH_ENTRY_SEPARATOR,
+	map { join $HASH_PAIR_SEPARATOR, @{$_} } @{$result};
+    }
+    $hash = (tied %{$hashref})->{PHASH};
+  } elsif (!tied(%{$hashref}) && 100 < scalar keys %{$hashref}) {
+    tie %{$hashref}, 'Devel::DumpTrace::CachedDisplayedHash', %{$hashref};
+    $hash = (tied %{$hashref})->{PHASH};
   } else {
-
-    return $ref . join $HASH_ENTRY_SEPARATOR,
-      map {
-	dump_scalar($_) . $HASH_PAIR_SEPARATOR
-	  . dump_scalar($hashref->{$_})
-	} keys %{$hashref};
-
+    $hash = { map { dump_scalar($_) => dump_scalar($hashref->{$_}) }
+	      keys %{$hashref} };
   }
+
+  my @r;
+
+  if (_abbrev_style() < ABBREV_NONE) {
+    @r = Text::Shorten::shorten_hash(
+		$hash, $maxlen,
+		$HASH_ENTRY_SEPARATOR,
+		$HASH_PAIR_SEPARATOR );
+  } else {
+    @r = map { [ $_ => $hash->{$_} ] } keys %{$hash};
+  }
+
+  if (tied(%{$hashref})
+      && ref(tied %{$hashref}) eq 'Devel::DumpTrace::CachedDisplayedHash') {
+    (tied %{$hashref})->store_cache($cache_key, \@r);
+  }
+
+  return $ref . join $HASH_ENTRY_SEPARATOR,
+    map { join $HASH_PAIR_SEPARATOR, @{$_} } @r;
 }
 
 sub array_repr {
+  # XXX - magic numbers, type names
   my $arrayref = shift;
+
   return '' if !defined $arrayref;
   my $ref = ref $arrayref && ref $arrayref ne 'ARRAY'
     ? ref($arrayref) . ': ' : '';
-  my @elem = map { dump_scalar($_) } @{$arrayref};
-  if (_abbrev_style() < ABBREV_NONE) {
-    my $maxlen = _abbrev_style() > ABBREV_STRONG  ? 79 : 19;
-    @elem = Text::Shorten::shorten_array(
-		\@elem, $maxlen, $ARRAY_ELEM_SEPARATOR);
+  my $maxlen = _abbrev_style() < ABBREV_NONE
+    ? _abbrev_style() > ABBREV_STRONG ? 79 : 19 : -1;
+  my $cache_key = join ':', $maxlen, $ARRAY_ELEM_SEPARATOR;
+  my $array;
+
+  # When the array gets large, tie it to 
+  # Devel::DumpTrace::CachedDisplayedArray and
+  # see if we can avoid some expensive calls
+  # to  Text::Shorten::shorten_array .
+
+  if (tied @{$arrayref}
+      && ref(tied @{$arrayref}) eq 'Devel::DumpTrace::CachedDisplayedArray') {
+
+    my $result = (tied @{$arrayref})->get_cache($cache_key);
+    if (defined $result) {
+      return $ref . join $ARRAY_ELEM_SEPARATOR, @$result;
+    }
+    $array = (tied @{$arrayref})->{PARRAY};
+  } elsif (!tied(@{$arrayref}) && 100 < scalar @{$arrayref}) {
+    tie @{$arrayref}, 'Devel::DumpTrace::CachedDisplayedArray', @{$arrayref};
+    $array = (tied @{$arrayref})->{PARRAY};
+  } else {
+    $array = [ map { dump_scalar($_) } @{$arrayref} ];
   }
-  return $ref . join $ARRAY_ELEM_SEPARATOR, @elem;
+
+  my @r;
+  if ($maxlen > 0) {
+    @r = Text::Shorten::shorten_array( $array, $maxlen, $ARRAY_ELEM_SEPARATOR);
+  } else {
+    @r = @{$array};
+  }
+  if (tied(@{$arrayref})
+      && ref(tied @{$arrayref}) eq 'Devel::DumpTrace::CachedDisplayedArray') {
+    (tied @{$arrayref})->store_cache($cache_key, \@r);
+  }
+  return $ref . join $ARRAY_ELEM_SEPARATOR, @r;
 }
 
 sub handle_deferred_output {
@@ -336,12 +399,13 @@ sub handle_deferred_output {
     # make post-eval adjustments to deferred output.
     my ($expr1, $expr2, $file, $line) = @deferred;
     if (defined $file) {
-      print {$XTRACE_FH} ">>>>> $file:$line:\t",
-	perform_extended_variable_substitutions($expr1, $deferred_pkg), $expr2;
+      print {$DUMPTRACE_FH} ">>>>> $file:$line:\t",
+	perform_extended_variable_substitutions($expr1, $deferred_pkg),
+	$expr2;
     } else {
-      print {$XTRACE_FH} ">>>>>\t\t ",
+      print {$DUMPTRACE_FH} ">>>>>\t\t ",
 	perform_variable_substitutions($expr1, $deferred_pkg), $expr2;
-      print {$XTRACE_FH} $SEPARATOR;
+      print {$DUMPTRACE_FH} $SEPARATOR;
     }
     @deferred = ();
   }
@@ -550,8 +614,10 @@ sub import_all {
   return;
 }
 
-# use PPI by default, if available? Not yet.
-###  eval 'use Devel::DumpTrace::PPI';
+# use PPI by default, if available? Yeah, OK.
+$Devel::DumpTrace::NO_PPI
+  || $ENV{DUMPTRACE_NOPPI}
+  || eval 'use Devel::DumpTrace::PPI;1';    ## no critic (StringyEval)
 
 ##################################################################
 # Devel::DumpTrace::VerboseLevel: tie class for $Devel::DumpTrace::TRACE.
@@ -610,15 +676,17 @@ Devel::DumpTrace - Evaluate and print out each line before it is executed.
 
 =head1 VERSION
 
-0.06
+0.07
 
 =head1 SYNOPSIS
 
     perl -d:DumpTrace program.pl
     perl -d:DumpTrace=verbose program.pl
     perl -d:DumpTrace=quiet program.pl
+    perl -d:DumpTrace=<n> program.pl
 
     perl -d:DumpTrace::PPI program.pl
+    perl -d:DumpTrace::noPPI program.pl
 
 =head1 DESCRIPTION
 
@@ -672,11 +740,29 @@ detailed output:
 See C<$Devel::DumpTrace::TRACE> under the L<"VARIABLES"> section
 for more details about the different levels of verbosity.
 
+This distribution comes with both a basic parser and a
+L<Devel::DumpTrace::PPI|"PPI-based parser">. If the L<PPI|"PPI">
+module is installed on your system, then this module will automatically
+use the PPI-based parser to analyze the traced code. You can
+force this module to use the basic parser by running with the
+C<-d:DumpTrace::noPPI> argument or by setting the C<DUMPTRACE_NOPPI>
+environment variable:
+
+    # use PPI if available, otherwise use basic parser
+    $ perl -d:DumpTrace program.pl
+
+    # fails if PPI is not available
+    $ perl -d:DumpTrace::PPI program.pl
+
+    # always uses basic parser
+    $ perl -d:DumpTrace::noPPI program.pl
+    $ DUMPTRACE_NOPPI=1 perl -d:DumpTrace program.pl
+
 There is also a L<Devel::DumpTrace::PPI|"Devel::DumpTrace::PPI"> module in this
 distribution which relies on L<PPI|"PPI"> to understand the source code.
 
 See the L<"BUGS AND LIMITATIONS"> section for important, er, limitations
-of this module.
+of this module, especially for the basic parser.
 
 =head1 SUBROUTINES/METHODS
 
@@ -695,7 +781,7 @@ rather than leave it set for the entire program. For example:
 
     BEGIN { $Devel::DumpTrace::TRACE = 0 }
 
-    &some_non_critical_code();
+    &some_non_critical_code_that_more_or_less_works();
 
     $Devel::DumpTrace::TRACE = 'normal';
     &the_critial_code_you_want_to_debug();
@@ -834,25 +920,28 @@ the C<$Devel::Trace::TRACE> variable. This way you can enable settings
 in your program that can be used by both L<Devel::Trace|"Devel::DumpTrace">
 and C<Devel::DumpTrace>.
 
-=head2 C<$Devel::DumpTrace::XTRACE_FH>
+=head2 C<$Devel::DumpTrace::DUMPTRACE_FH>
 
 By default, all output from the C<Devel::DumpTrace> module
 is written to standard error. This behavior can be changed
-by setting C<$Devel::DumpTrace::XTRACE_FH> to the desired
+by setting C<$Devel::DumpTrace::DUMPTRACE_FH> to the desired
 I/O handle:
 
     BEGIN {
         # if Devel::DumpTrace is loaded, direct output to xtrace-output.txt
         if ($INC{'Devel/DumpTrace.pm'}) {
-            open $Devel::DumpTrace::XTRACE_FH, '>', '/path/xtrace-output.txt';
+            open $Devel::DumpTrace::DUMPTRACE_FH, '>', '/path/xtrace-output.txt';
         }
     }
 
 The output stream for the C<Devel::DumpTrace> module can also be controlled
-with the environment variable C<XTRACE_FH>. If this variable is set
+with the environment variable C<DUMPTRACE_FH>. If this variable is set
 to C<STDOUT>, then output will be directed to standard output. If this
 variable contains another value that looks like a filename, this module
 will open a file with that name and write the trace output to that file.
+
+B<< Backwards-incompatible change: >> in v0.06, this variable was called 
+C<XTRACE_FH>.
 
 =head2 C<$Devel::DumpTrace::ARRAY_ELEM_SEPARATOR = ','>
 
@@ -885,9 +974,15 @@ be I<included>).
 
 =head1 CONFIGURATION AND ENVIRONMENT
 
-C<Devel::DumpTrace> uses the C<XTRACE_FH> and C<XTRACE_LEVEL>
+C<Devel::DumpTrace> uses the C<DUMPTRACE_FH> and C<DUMPTRACE_LEVEL>
 environment variables to configure some package variables.
 See L</"VARIABLES">.
+The C<DUMPTRACE_NOPPI> variable can be set to force this module
+to use the basic code parser and to ignore the L<PPI|"PPI">-based
+version.
+
+B<< This is an incompatible change from v0.06, which recognized 
+the vars C<XTRACE_FH> and C<XTRACE_LEVEL>. >>
 
 =head1 INCOMPATIBILITIES
 
@@ -910,11 +1005,19 @@ and L<Scalar::Util|"Scalar::Util"> modules.
 
 =head2 Parser limitations
 
-The parser used by this module to identify Perl variables in
-the source code is quite crude. It is hoped that the parser is
-"good enough" for a majority of uses for this module;
-but there are many known cases where the output will be
-incorrect or misleading, including:
+Some known cases where the output of this module will
+be incorrect or misleading include:
+
+=head3 Multiple statements on one line
+
+    $b = 7;
+    $a=4; $b=++$a;
+    >>>>> 4 = 4; 7 = 4;
+    $a=4; $b=++$a;
+    >>>>> 5 = 4; 5 = 5;
+
+All statements on a line are evaluated, not just the statement
+currently being executed.
 
 =head3 Statements with chained assignments; complex assignment expressions (*)
 
@@ -930,31 +1033,12 @@ incorrect or misleading, including:
 Everything to the right of the I<first> assignment operator in a
 statement is evaluated I<before> the statement is executed.
 
-=head3 Multiple statements on one line
-
-    $b = 7;
-    $a=4; $b=++$a;
-    >>>>> 4 = 4; 7 = 4;
-    $a=4; $b=++$a;
-    >>>>> 5 = 4; 5 = 5;
-
-All statements on a line are evaluated, not just the statement
-currently being executed.
-
 =head3 Multiple lines for one statement (*)
 
     $a = ($b + $c                # ==> oops, all this module sees is
          + $d + $e);             #     $a = ($b + $c
 
 Only the first line of code in an expression is evaluated.
-
-=head3 String literals that contain variable names (*)
-
-    print STDERR "\$x is $x\n";  # ==> print STDERR "\4 is 4\n";
-    $email = 'mob@cpan.org';     # ==> $email = 'mob().org'
-
-The parser is not sophisticated enough to tell whether a sigil is
-inside non-interpolated quotes.
 
 =head3 Lexical decalaration and assignment in same statement is
 not evaluated
@@ -967,31 +1051,7 @@ contain the variable that is being declared. After execution, the
 module examines the old snapshot, which still does not contain the
 new variable.
 
-For some of these limitations, there are easy workarounds
-(break up chained assignments, put all statements on separate lines, etc.)
-if you think the extra information provided by this module is worth the
-effort to make your code more friendly for this module.
-
-=head2 Implicit C<$_>, C<@_> (*)
-
-It would be nice if this module could detect when Perl was
-implicitly using some variables and display the implicit variable.
-
-    /expression/;        # should be  $_ =~ /expression/
-    my $self = shift;    # should be  my $self = shift @_;
-
-That is not currently a capability of this module.
-
-=head2 Special Perl variables are not recognized (*)
-
-    $a = join $/, 'foo', 'bar';  # ==> $a = join $/, 'foo', 'bar'
-
-Special variables with pure alphanumeric names like C<@ARGV>, C<$_>,
-and C<$1> will still be interpolated. I<Do see>
-L<perlfunc/"caller"> I<for some important caveats about how>
-C<@_> I<is represented by this module>.
-
-=head2 Displayed value of C<@_> variable is unreliable
+=head3 Displayed value of C<@_> variable is unreliable
 
 The displayed value of C<@_> inside a subroutine is subject to
 some of the issues described in L<perlfunc/"caller">:
@@ -1007,8 +1067,45 @@ some of the issues described in L<perlfunc/"caller">:
 That is, the displayed value of C<@_> inside a subroutine may be
 corrupted. Different versions of Perl may have different behavior.
 
-(*) - L<Devel::DumpTrace::PPI|"The Devel::DumpTrace::PPI module">
-uses L<PPI|"PPI"> and can address some of these limitations.
+=head2 Basic parser limitations
+
+This distribution ships with a L<PPI|"PPI">-based parser
+and a more basic parser that will be used if C<PPI> is not
+available (or if you explicitly request to use the basic
+parser). This parser is quite crude compared to the PPI-based
+parser, and suffers from these additional known issues:
+
+=head3 String literals that contain variable names
+
+    print STDERR "\$x is $x\n";  # ==> print STDERR "\4 is 4\n";
+    $email = 'mob@cpan.org';     # ==> $email = 'mob().org'
+
+The parser is not sophisticated enough to tell whether a sigil is
+inside non-interpolated quotes.
+
+=head3 Implicit C<$_>, C<@_>
+
+It would be nice if this parser could detect when Perl was
+implicitly using some variables and display the implicit variable.
+
+    /expression/;        # should be  $_ =~ /expression/
+    my $self = shift;    # should be  my $self = shift @_;
+
+That is not currently a capability of this module.
+
+=head3 Special Perl variables are not recognized
+
+    $a = join $/, 'foo', 'bar';  # ==> $a = join $/, 'foo', 'bar'
+
+Special variables with pure alphanumeric names like C<@ARGV>, C<$_>,
+and C<$1> will still be interpolated. I<Do see>
+L<perlfunc/"caller"> I<for some important caveats about how>
+C<@_> I<is represented by this module>.
+
+For some of these limitations, there are easy workarounds
+(break up chained assignments, put all statements on separate lines, etc.)
+if you think the extra information provided by this module is worth the
+effort to make your code more friendly for this module.
 
 =head2 Other bugs or feature requests
 
@@ -1052,8 +1149,9 @@ L<perl5db.pl|"dumpvar.pl">, as used by the Perl debugger.
 
 L<Devel::Trace|"Devel::Trace">, L<PadWalker|"PadWalker">.
 
-L<Devel::DumpTrace::PPI|"Devel::DumpTrace::PPI"> is part of this distribution and
-provides similar functionality using L<PPI|"PPI"> to parse the source code.
+L<Devel::DumpTrace::PPI|"Devel::DumpTrace::PPI"> is part of this 
+distribution and provides similar functionality using L<PPI|"PPI"> 
+to parse the source code.
 
 L<Devel::TraceVars|"Devel::TraceVars"> is a very similar effort to
 C<Devel::DumpTrace>, but this

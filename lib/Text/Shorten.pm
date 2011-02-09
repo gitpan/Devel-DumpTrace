@@ -1,30 +1,3 @@
-=head1 NAME
-
-Text::Shorten - Abbreviate long output
-
-=head1 VERSION
-
-0.02
-
-=head1 SYNOPSIS
-
-    use Text::Shorten ':all';
-    $short_string = shorten_scalar($really_long_string, 40);
-    @short_array = shorten_array(\@really_long_array, 80);
-    @short_hash = shorten_hash(\%really_large_hash, 80);
-
-=head1 DESCRIPTION
-
-C<Text::Shorten> creates small strings and small arrays from
-larger values for display purposes. The output will include
-the string C<"..."> to indicate that the value being displayed
-is abbreviated.
-
-=head1 FUNCTIONS
-
-
-=cut
-
 package Text::Shorten;
 
 use warnings;
@@ -35,25 +8,13 @@ our @ISA = qw(Exporter);
 our @EXPORT = qw();
 our @EXPORT_OK = qw(shorten_scalar shorten_array shorten_hash);
 our %EXPORT_TAGS = (all => [ @EXPORT_OK ]);
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 our $DOTDOTDOT = '...';
 our $DOTDOTDOT_LENGTH = length($DOTDOTDOT);
 our $DEFAULT_ARRAY_ELEM_SEPARATOR_LENGTH = 1;
 our $DEFAULT_HASH_ELEM_SEPARATOR_LENGTH = 1;
 our $DEFAULT_HASH_KEYVALUE_SEPARATOR_LENGTH = 2;
-
-=head2 shorten_scalar($SCALAR, $MAXLEN)
-
-Returns a representation of C<$SCALAR> that is no longer than
-C<$MAXLEN> characters. If C<$SCALAR> looks like a number,
-then this method will use scientific notation and reduce the
-precision of the number to fit it into the alloted space.
-
-The output of this function is not guaranteed to make sense
-when C<$MAXLEN> is small, say, less than 10.
-
-=cut
 
 sub shorten_scalar {
   my ($scalar, $maxlen) = @_;
@@ -182,6 +143,213 @@ sub shorten_scalar {
   return "$sign$d1$d$d2$e$exp";
 }
 
+# XXX - do we want to make it configurable whether shorten_array
+#       always returns at least one full element?
+
+sub shorten_array {
+  my ($array, $maxlen, $seplen, @key) = @_;
+  if (!defined($seplen)) {
+    $seplen = $DEFAULT_ARRAY_ELEM_SEPARATOR_LENGTH;
+  } elsif ($seplen =~ /\D/) {
+    $seplen = length($seplen);
+  }
+  my $dotslen = $seplen + $DOTDOTDOT_LENGTH;
+  # my $n = @$array;
+  my $n = $#{$array} + 1;
+  @key = (0) if @key == 0;
+  @key = sort {$a <=> $b} grep { $_ >= 0 && $_ < $n } @key;
+  my @inc = (0) x $n;
+
+  my $len = $n > 0 ? $dotslen - 1 : 0;
+  if (@key > 1 || (@key == 1 && $key[0] != 0)) {
+
+    my @prio = (0) x $n;
+    # "prioritize" elements for display, giving preference to
+    #     key items
+    #     items between key items
+    #     the first item
+    #     the last item
+    if ($n > 0) {
+      $prio[$_]  = 8 for @key;
+      $prio[$_] += 4 for $key[0]..$key[-1];
+    }
+    $prio[0]  += 2;
+    $prio[-1]++;
+
+    my $insert_fails = 0;
+    for my $i ( sort { $prio[$b] <=> $prio[$a] || $a <=> $b } 0..$n-1) {
+      last if $prio[$i] < 8 && $len > $maxlen;
+
+      # what are the consequences of including $array->[$i] in the output?
+      #
+      # if none of $array->[$i]'s neighbors are excluded:
+      #      then we lose $dotslen and add length of $array->[$i]
+      #      [   a , ... , c ] ==> [ a , b , c ]
+      #
+      # if one of $array->[$i]'s neighbors are excluded:
+      #      then we add $array->[$i]
+      #      [   a , ... ] => [ a , b , ... ]
+      #      [   ... , c ] => [ ... , b , c ]
+      #      [  edge ... ] => [ edge a , ... ]
+      #
+      # if two of $array->[$i]'s neighbors are excluded
+      #      then we gain $dotslen + $array->[$i]
+      #      [ ... ] => [ ... , a , ... ]
+
+      my $excl = ($i>0 && !$inc[$i-1]) + ($i<$n-1 && !$inc[$i+1]) + 0;
+      my $dlen = defined($array->[$i])&&length($array->[$i])
+	+ $seplen + $dotslen * ($excl - 1);
+      if ($prio[$i] >= 8 || $len + $dlen <= $maxlen) {
+	$inc[$i] = 1;
+	$len += $dlen;
+	$insert_fails = 0;
+      } else {
+
+	# for very large arrays, don't keep trying to squeeze
+	# that last element in when there is a low probability
+	# that it will work ...
+
+	last if ++$insert_fails > 100;
+      }
+    }
+
+  } else {
+
+    # don't need to sort, don't need to check $prio[$i]
+    my $insert_fails = 0;
+    for my $i (0 .. $n-1) {
+      last if $len > $maxlen;
+      my $excl = ($i>0 && !$inc[$i-1]) + ($i<$n-1 && !$inc[$i+1]) + 0;
+      my $dlen = defined($array->[$i])&&length($array->[$i])
+	+ $seplen + $dotslen * ($excl - 1);
+      if ($len + $dlen <= $maxlen) {
+	$inc[$i] = 1;
+	$len += $dlen;
+      } else {
+	last if ++$insert_fails > 100;
+      }
+    }
+  }
+
+  # construct array, including elements in @inc
+  my @result = ();
+  my @explicit = grep $inc[$_], 0..$#inc;
+  my $i = 0;
+  while (@explicit) {
+    if ($i < $explicit[0]) {
+      push @result, $DOTDOTDOT;
+    }
+    $i = shift @explicit;
+    push @result, $array->[$i];
+    $i++;
+  }
+  if ($i < $n) {
+    push @result, $DOTDOTDOT;
+  }
+  return @result;
+}
+
+sub shorten_hash {
+  my ($hash, $maxlen, $sep1, $sep2, @key) = @_;
+
+  if (!defined($sep1)) {
+    $sep1 = $DEFAULT_HASH_ELEM_SEPARATOR_LENGTH;
+  } elsif ($sep1 =~ /\D/) {
+    $sep1 = length($sep1);
+  }
+  if (!defined($sep2)) {
+    $sep2 = $DEFAULT_HASH_KEYVALUE_SEPARATOR_LENGTH;
+  } elsif ($sep2 =~ /\D/) {
+    $sep2 = length($sep2);
+  }
+
+  my $total_len = -$sep1;
+  for my $k (keys %$hash) {
+    $total_len += length($k) + length($hash->{$k}) + $sep1 + $sep2;
+    last if $total_len > $maxlen;
+  }
+  if ($total_len <= $maxlen) {
+    # ok to include all elements
+    return map { [ $_ , $hash->{$_} ] } keys %$hash;
+  }
+
+  my @r = ();
+  my @hashkeys = ();
+  my $hashkey = {};
+
+  if (@key > 0) {
+    my %key = map { $_ => 1 } @key;
+    if (100 > keys %$hash) {
+      @hashkeys = sort {
+	($key{$b}||0) <=> ($key{$a}||0) 
+	  || $a cmp $b
+	} keys %$hash;
+    } else {
+      my @hashkeys = @key = grep { defined $key{$_} } @key;
+      if (1) {
+	push @hashkeys, grep { !defined $key{$_} } keys %$hash;
+      } else {
+	push @hashkeys, grep { ! $_ ~~ @key } keys %$hash;
+      }
+    }
+  } else {
+    if (100 > keys %$hash) {
+      @hashkeys = sort keys %$hash;
+    } else {
+      $hashkey = $hash;
+    }
+  }
+
+  my $len = 3;
+
+  foreach my $key (@hashkeys, keys %$hashkey) {
+    my $dlen = $sep1 + $sep2 + length($key) + length($hash->{$key});
+    last if $len + $dlen > $maxlen
+      && @r > 0;      # always include at least one key-value pair
+    push @r, [ $key, $hash->{$key} ];
+    $len += $dlen;
+  }
+  return @r, [ $DOTDOTDOT ];
+}
+
+1;
+
+__END__
+
+=head1 NAME
+
+Text::Shorten - Abbreviate long output
+
+=head1 VERSION
+
+0.03
+
+=head1 SYNOPSIS
+
+    use Text::Shorten ':all';
+    $short_string = shorten_scalar($really_long_string, 40);
+    @short_array = shorten_array(\@really_long_array, 80);
+    @short_hash = shorten_hash(\%really_large_hash, 80);
+
+=head1 DESCRIPTION
+
+C<Text::Shorten> creates small strings and small arrays from
+larger values for display purposes. The output will include
+the string C<"..."> to indicate that the value being displayed
+is abbreviated.
+
+=head1 FUNCTIONS
+
+=head2 shorten_scalar($SCALAR, $MAXLEN)
+
+Returns a representation of C<$SCALAR> that is no longer than
+C<$MAXLEN> characters. If C<$SCALAR> looks like a number,
+then this method will use scientific notation and reduce the
+precision of the number to fit it into the alloted space.
+
+The output of this function is not guaranteed to make sense
+when C<$MAXLEN> is small, say, less than 10.
+
 =head2 shorten_array($ARRAYREF, $MAXLEN [,$SEPARATOR=1 [,@KEY=()]])
 
 Returns a list that is representative of the list in C<$ARRAYREF>
@@ -203,87 +371,6 @@ output length to exceed C<$MAXLEN>.
 
 The output of this function is not guaranteed to make sense
 when C<$MAXLEN> is small (say, less than 15).
-
-=cut
-
-# XXX - do we want to make it configurable whether shorten_array
-#       always returns at least one full element?
-
-sub shorten_array {
-  my ($array, $maxlen, $seplen, @key) = @_;
-  if (!defined($seplen)) {
-    $seplen = $DEFAULT_ARRAY_ELEM_SEPARATOR_LENGTH;
-  } elsif ($seplen =~ /\D/) {
-    $seplen = length($seplen);
-  }
-  my $dotslen = $seplen + $DOTDOTDOT_LENGTH;
-  my $n = @$array;
-  @key = (0) if @key == 0;
-  @key = sort {$a <=> $b} grep { $_ >= 0 && $_ < $n } @key;
-  my @prio = (0) x $n;
-  my @inc = (0) x $n;
-
-  # "prioritize" elements for display, giving preference to
-  #     key items
-  #     items between key items
-  #     the first item
-  #     the last item
-  if ($n > 0) {
-    $prio[$_]  = 8 for @key;
-    $prio[$_] += 4 for $key[0]..$key[-1];
-  }
-  $prio[0]  += 2;
-  $prio[-1]++;
-
-  my @i = sort { $prio[$b] <=> $prio[$a] || $a <=> $b } 0..$n-1;
-  my $len = $n > 0 ? $dotslen - 1 : 0;
-
-  for my $i (@i) {
-    last if $prio[$i] < 8 && $len > $maxlen;
-
-    # what are the consequences of including $array->[$i] in the output?
-    #
-    # if none of $array->[$i]'s neighbors are excluded:
-    #      then we lose $dotslen and add length of $array->[$i]
-    #      [   a , ... , c ] ==> [ a , b , c ]
-    #
-    # if one of $array->[$i]'s neighbors are excluded:
-    #      then we add $array->[$i]
-    #      [   a , ... ] => [ a , b , ... ]
-    #      [   ... , c ] => [ ... , b , c ]
-    #      [  edge ... ] => [ edge a , ... ]
-    #
-    # if two of $array->[$i]'s neighbors are excluded
-    #      then we gain $dotslen + $array->[$i]
-    #      [ ... ] => [ ... , a , ... ]
-
-
-    my $excl = ($i>0 && !$inc[$i-1]) + ($i<$n-1 && !$inc[$i+1]) + 0;
-    my $dlen = defined($array->[$i])&&length($array->[$i])
-      + $seplen + $dotslen * ($excl - 1);
-    if ($prio[$i] >= 8 || $len + $dlen <= $maxlen) {
-      $inc[$i] = 1;
-      $len += $dlen;
-    }
-  }
-
-  # construct array, including elements in @inc
-  my @result = ();
-  my @explicit = grep $inc[$_], 0..$#inc;
-  my $i = 0;
-  while (@explicit) {
-    if ($i < $explicit[0]) {
-      push @result, $DOTDOTDOT;
-    }
-    $i = shift @explicit;
-    push @result, $array->[$i];
-    $i++;
-  }
-  if ($i < $n) {
-    push @result, $DOTDOTDOT;
-  }
-  return @result;
-}
 
 =head2 shorten_hash($HASHREF, $MAXLEN [, $SEP1=1, $SEP2=2 [, @KEY=() ]])
 
@@ -307,49 +394,6 @@ to indicate that some key-value pairs are not being displayed.
 The output of this function is not guaranteed to make sense
 when C<$MAXLEN> is small (say, less than 20).
 
-=cut
-
-sub shorten_hash {
-  my ($hash, $maxlen, $sep1, $sep2, @key) = @_;
-
-  if (!defined($sep1)) {
-    $sep1 = $DEFAULT_HASH_ELEM_SEPARATOR_LENGTH;
-  } elsif ($sep1 =~ /\D/) {
-    $sep1 = length($sep1);
-  }
-  if (!defined($sep2)) {
-    $sep2 = $DEFAULT_HASH_KEYVALUE_SEPARATOR_LENGTH;
-  } elsif ($sep2 =~ /\D/) {
-    $sep2 = length($sep2);
-  }
-
-  my $total_len = -$sep1;
-  for my $k (keys %$hash) {
-    $total_len += length($k) + length($hash->{$k}) + $sep1 + $sep2;
-  }
-  if ($total_len <= $maxlen) {
-    # ok to include all elements
-    return map { [ $_ , $hash->{$_} ] } keys %$hash;
-  }
-
-  my @r = ();
-  my %key = map { $_ => 1 } @key;
-  my @hashkeys = sort {
-    ($key{$b}||0) <=> ($key{$a}||0) 
-      || 
-    $a cmp $b
-  } keys %$hash;
-  my $len = 3;
-  foreach my $key (@hashkeys) {
-    my $dlen = $sep1 + $sep2 + length($key) + length($hash->{$key});
-    last if $len + $dlen > $maxlen
-      && @r > 0;      # always include at least one key-value pair
-    push @r, [ $key, $hash->{$key} ];
-    $len += $dlen;
-  }
-  return @r, [ $DOTDOTDOT ];
-}
-
 =head1 EXPORT
 
 Nothing by default. The three functions C<shorten_scalar>,
@@ -362,9 +406,11 @@ Marty O'Brien, C<< <mob at cpan.org> >>
 
 =head1 BUGS
 
-Please report any bugs or feature requests to C<bug-text-shorten at rt.cpan.org>, or through
-the web interface at L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=Text-Shorten>.  I will be notified, and then you'll
-automatically be notified of progress on your bug as I make changes.
+Please report any bugs or feature requests to 
+C<bug-text-shorten at rt.cpan.org>, or through the web interface at 
+L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=Text-Shorten>.  I will be 
+notified, and then you'll automatically be notified of progress on your bug
+ as I make changes.
 
 =head1 SUPPORT
 
@@ -413,5 +459,18 @@ See http://dev.perl.org/licenses/ for more information.
 
 =cut
 
-1; # End of Text::Shorten
+
+
+TODOs:
+----
+If we're going to make this module really efficient for large
+arrays and hashes, we need caching.
+That could mean tie'ing arrays and hashes to behavior
+that caches the short output (for given maximum lengths
+and separators), but clears the cache when the elements
+change.
+
+... actually the caching should go at the Devel-DumpTrace
+level since that module makes modifications to every hash
+and array that it touches .....
 

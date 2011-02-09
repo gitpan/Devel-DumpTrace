@@ -10,10 +10,13 @@ use warnings;
 no warnings 'redefine';
 local $| = 1;
 
+croak "Devel::DumpTrace::PPI may not be used when \$Devel::DumpTrace::NO_PPI ",
+  "is set (Did you load 'Devel::DumpTrace::noPPI'?\n"
+  if $Devel::DumpTrace::NO_PPI;
 eval {use PPI;1}
   or croak "PPI not installed. Can't use Devel::DumpTrace::PPI module";
 
-our $VERSION = '0.06';
+our $VERSION = '0.07';
 our $IMPLICIT_ = 1;
 
 # built-in functions that may use $_ implicitly
@@ -67,14 +70,33 @@ sub get_source {
       my $_line = $element->line_number;
       $ppi_src{$file}[$_line] ||= [];
 
-#print STDERR ref($element),"\t",$_line,"\t",substr($element,0,20),$/;
-
       # don't include this element on this line if any of its
       # ancestors are included in this line
       my $parent = $element->parent;
       while ($parent) {
 	next ELEMENT if $parent->line_number == $_line;
 	$parent = $parent->parent;
+      }
+
+      # 0.07: what whitespace and comments are there between the last code token
+      #       of a statement and a ';' structure element? Remove them if there
+      #       is more than one.
+      my @tokens = $element->tokens();
+      if (@tokens > 3 && ref($tokens[-1]) eq 'PPI::Token::Structure' && $tokens[-1] eq ';') {
+	my $j = -2;
+	while (defined($tokens[$j]) 
+	       && (ref($tokens[$j]) eq 'PPI::Token::Whitespace' 
+		   || ref($tokens[$j]) eq 'PPI::Token::Comment'
+		   || ref($tokens[$j]) eq 'PPI::Token::POD')) {
+	  $j--;
+	}
+	if ($j < -3 && defined($tokens[$j])) {
+
+	  for my $k ($j+1 .. -1) {
+	    print STDERR "Token $k $tokens[$k]: DELETED\n";
+	    $tokens[$k]->delete();
+	  }
+	}
       }
 
       if (ref($element) eq 'PPI::Statement::Compound') {
@@ -142,7 +164,7 @@ sub evaluate_and_display_line {
   $code .= "\n";
   $code =~ s/\n(.)/\n\t\t $1/g;
 
-  my $fh = $Devel::DumpTrace::XTRACE_FH;
+  my $fh = $Devel::DumpTrace::DUMPTRACE_FH;
   if ($style > DISPLAY_TERSE) {
     print {$fh} ">>    $file:$line:\n";
     print {$fh} ">>>   \t\t $code";
@@ -371,7 +393,7 @@ sub preval {
 # Overrides &handle_deferred_output in Devel/DumpTrace.pm
 sub handle_deferred_output {
   if (@deferred) {
-    my $fh = $Devel::DumpTrace::XTRACE_FH;
+    my $fh = $Devel::DumpTrace::DUMPTRACE_FH;
     my @e = @deferred;
     @deferred = ();
     my $style = _display_style();
@@ -406,7 +428,7 @@ sub perform_variable_substitution {
   my $i = pop @_;
 
   my $sigil = substr $_[$i], 0, 1;
-  return if $sigil eq '&';
+  return if $sigil eq '&' || $sigil eq '*';
   my $varname = substr $_[$i], 1;
   $varname =~ s/^\s+//;
   $varname =~ s/\s+$//;
@@ -443,22 +465,13 @@ sub perform_variable_substitution {
 }
 
 sub PPI::Token::Operator::is_assignment_operator {
-  my $self = "$_[0]";
+  my $op = $_[0]->{content};
   for my $aop (qw(= += -= *= /= %= &= |= ^= .= x=
 		 **= &&= ||= //= <<= >>=)) {
-    return 1 if $self eq $aop;
+    return 1 if $op eq $aop;
   }
   return;
 }
-
-
-#  return $self eq '=' || $self eq '+=' || $self eq '-=' || $self eq '*='
-#    || $self eq '/=' || $self eq '%=' || $self eq '&='
-#    || $self eq '|=' || $self eq '^=' || $self eq '.='
-#    || $self eq 'x='
-#    || $self eq '**=' || $self eq '&&=' || $self eq '||='
-#    || $self eq '//=' || $self eq '<<=' || $self eq '>>=';
-
 
 1;
 
@@ -470,7 +483,7 @@ Devel::DumpTrace::PPI - PPI-based version of Devel::DumpTrace
 
 =head1 VERSION
 
-0.06
+0.07
 
 =head1 SYNOPSIS
 
@@ -627,8 +640,8 @@ None
 =head1 CONFIGURATION AND ENVIRONMENT
 
 Like L<Devel::DumpTrace|"Devel::DumpTrace">, this module also reads
-the C<XTRACE_FH> and
-C<XTRACE_LEVEL> environment variables.
+the C<DUMPTRACE_FH> and
+C<DUMPTRACE_LEVEL> environment variables.
 See C<Devel::DumpTrace> for
 details about how to use these variables.
 

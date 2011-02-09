@@ -37,11 +37,11 @@ for my $pkg (0,1,2) {
 
   my $level = 3;
   my $file = "$0.out.$pkg$level";
-  $ENV{XTRACE_FH} = $file;
+  $ENV{DUMPTRACE_FH} = $file;
   if ($pkg > 1) {
-    $ENV{XTRACE_LEVEL} = 100 + $level;
+    $ENV{DUMPTRACE_LEVEL} = 100 + $level;
   } else {
-    $ENV{XTRACE_LEVEL} = "$level,$pkg";
+    $ENV{DUMPTRACE_LEVEL} = "$level,$pkg";
   }
   my $c1 = system($^X, $dmodule, "-Iblib/lib", "-Ilib", "$0.pl");
 
@@ -71,11 +71,11 @@ for my $pkg (0,1,2) {
 
   my $level = 5;
   my $file = "$0.out.$pkg$level";
-  $ENV{XTRACE_FH} = $file;
+  $ENV{DUMPTRACE_FH} = $file;
   if ($pkg > 1) {
-    $ENV{XTRACE_LEVEL} = 100 + $level;
+    $ENV{DUMPTRACE_LEVEL} = 100 + $level;
   } else {
-    $ENV{XTRACE_LEVEL} = "$level,$pkg";
+    $ENV{DUMPTRACE_LEVEL} = "$level,$pkg";
   }
   my $c1 = system($^X, $dmodule, "-Iblib/lib", "-Ilib", "$0.pl");
   my $keep = 0;

@@ -13,6 +13,12 @@ to make use of it.
   $TESTS = "t/*.t t/ppi/00-load.t";
 }
 
+# no index instructions for PAUSE
+my $NO_INDEX = 
+  { 'package' =>
+    ['Text::Shorten', 'Devel::DumpTrace::CachedDisplayedArray',
+     'Devel::DumpTrace::CachedDisplayedHash', 'Devel::DumpTrace::noPPI'] };
+
 WriteMakefile(
     NAME                => 'Devel::DumpTrace',
     AUTHOR              => q{Marty O'Brien <mob@cpan.org>},
@@ -20,6 +26,9 @@ WriteMakefile(
     ABSTRACT_FROM       => 'lib/Devel/DumpTrace.pm',
     ($ExtUtils::MakeMaker::VERSION+0 >= 6.3002
       ? ('LICENSE'=> 'perl')
+      : ()),
+    ($ExtUtils::MakeMaker::VERSION+0 >= 6.46
+      ? ('META_MERGE'   => { no_index => $NO_INDEX })
       : ()),
     PL_FILES            => {},
     PREREQ_PM => {

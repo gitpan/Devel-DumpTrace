@@ -25,7 +25,9 @@ ok(dump_scalar("word") eq "'word'", 'dump scalar text')
 	or diag(dump_scalar("word"));
 ok(dump_scalar([1,'foo']) eq "[1,'foo']", 'dump scalar ARRAY ref')
 	or diag(dump_scalar([1,'foo']));
-ok(dump_scalar({a=>2,b=>'bar'}) eq "{'a'=>2;'b'=>'bar'}",
+my $ds = dump_scalar( {a=>2, b=>'bar'} );
+ok($ds eq "{'a'=>2;'b'=>'bar'}"
+	|| $ds eq "{'b'=>'bar';'a'=>2}",
    'dump scalar HASH ref') or diag(dump_scalar({a=>2,b=>'bar'}));
 ok(dump_scalar(sub { my $foo=42 }) =~ /^CODE/,
    'dump scalar CODE ref');
