@@ -286,11 +286,7 @@ sub shorten_hash {
 	} keys %$hash;
     } else {
       my @hashkeys = @key = grep { defined $key{$_} } @key;
-      if (1) {
-	push @hashkeys, grep { !defined $key{$_} } keys %$hash;
-      } else {
-	push @hashkeys, grep { ! $_ ~~ @key } keys %$hash;
-      }
+      push @hashkeys, grep { !defined $key{$_} } keys %$hash;
     }
   } else {
     if (100 > keys %$hash) {

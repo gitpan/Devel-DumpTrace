@@ -21,7 +21,7 @@ use constant ABBREV_NONE   => 2;  # no abbreviation
 use constant CALLER_PKG => 0;     # package name
 use constant CALLER_SUB => 3;     # current subroutine name
 
-our $VERSION = '0.07';
+our $VERSION = '0.08';
 our $ARRAY_ELEM_SEPARATOR = ',';
 our $HASH_ENTRY_SEPARATOR = ';';
 our $HASH_PAIR_SEPARATOR = '=>';
@@ -676,7 +676,7 @@ Devel::DumpTrace - Evaluate and print out each line before it is executed.
 
 =head1 VERSION
 
-0.07
+0.08
 
 =head1 SYNOPSIS
 
@@ -690,7 +690,7 @@ Devel::DumpTrace - Evaluate and print out each line before it is executed.
 
 =head1 DESCRIPTION
 
-L<Devel::Trace|"Similar to Devel::Trace">, this module will cause a message
+L<"Similar to Devel::Trace"|Devel::Trace>, this module will cause a message
 to be printed to standard error for each line of source code that is
 executed. In addition, this module will attempt to identify variable names
 in the source code and substitute the values of those variables. In this
@@ -737,11 +737,11 @@ detailed output:
     >>>>>            (1,3,26) = (1, 3, 23 + 3);
     -------------------------------------------
 
-See C<$Devel::DumpTrace::TRACE> under the L<"VARIABLES"> section
+See C<$Devel::DumpTrace::TRACE> under the L</"VARIABLES"> section
 for more details about the different levels of verbosity.
 
 This distribution comes with both a basic parser and a
-L<Devel::DumpTrace::PPI|"PPI-based parser">. If the L<PPI|"PPI">
+L<"PPI-based parser"|Devel::DumpTrace::PPI>. If the L<PPI|PPI>
 module is installed on your system, then this module will automatically
 use the PPI-based parser to analyze the traced code. You can
 force this module to use the basic parser by running with the
@@ -758,10 +758,10 @@ environment variable:
     $ perl -d:DumpTrace::noPPI program.pl
     $ DUMPTRACE_NOPPI=1 perl -d:DumpTrace program.pl
 
-There is also a L<Devel::DumpTrace::PPI|"Devel::DumpTrace::PPI"> module in this
-distribution which relies on L<PPI|"PPI"> to understand the source code.
+There is also a L<Devel::DumpTrace::PPI|Devel::DumpTrace::PPI> module in this
+distribution which relies on L<PPI|PPI> to understand the source code.
 
-See the L<"BUGS AND LIMITATIONS"> section for important, er, limitations
+See the L</"BUGS AND LIMITATIONS"> section for important, er, limitations
 of this module, especially for the basic parser.
 
 =head1 SUBROUTINES/METHODS
@@ -911,13 +911,13 @@ By default C<Devel::DumpTrace> does not evaluate statements in any "system"
 modules, which are defined as any module from a file that resides under
 an absolute path in your system's C<@INC> list of directories. If the
 C<$TRACE> variable is set to a value larger than 100, then this module
-B<will> drill down into such modules. See also L<"EXCLUDE_PKG"> and
-L<"INCLUDE_PKG"> for another way to exercise control over what packages
+B<will> drill down into such modules. See also L</"EXCLUDE_PKG"> and
+L</"INCLUDE_PKG"> for another way to exercise control over what packages
 this module will explore.
 
 For convenience, the C<$Devel::DumpTrace::TRACE> variable is aliased to
 the C<$Devel::Trace::TRACE> variable. This way you can enable settings
-in your program that can be used by both L<Devel::Trace|"Devel::DumpTrace">
+in your program that can be used by both L<Devel::Trace|Devel::Trace>
 and C<Devel::DumpTrace>.
 
 =head2 C<$Devel::DumpTrace::DUMPTRACE_FH>
@@ -978,7 +978,7 @@ C<Devel::DumpTrace> uses the C<DUMPTRACE_FH> and C<DUMPTRACE_LEVEL>
 environment variables to configure some package variables.
 See L</"VARIABLES">.
 The C<DUMPTRACE_NOPPI> variable can be set to force this module
-to use the basic code parser and to ignore the L<PPI|"PPI">-based
+to use the basic code parser and to ignore the L<PPI|PPI>-based
 version.
 
 B<< This is an incompatible change from v0.06, which recognized 
@@ -998,8 +998,8 @@ Nothing interesting.
 
 =head1 DEPENDENCIES
 
-C<Devel::DumpTrace> requires the L<PadWalker|"PadWalker">
-and L<Scalar::Util|"Scalar::Util"> modules.
+C<Devel::DumpTrace> requires the L<PadWalker|PadWalker>
+and L<Scalar::Util|Scalar::Util> modules.
 
 =head1 BUGS AND LIMITATIONS
 
@@ -1069,7 +1069,7 @@ corrupted. Different versions of Perl may have different behavior.
 
 =head2 Basic parser limitations
 
-This distribution ships with a L<PPI|"PPI">-based parser
+This distribution ships with a L<PPI|PPI>-based parser
 and a more basic parser that will be used if C<PPI> is not
 available (or if you explicitly request to use the basic
 parser). This parser is quite crude compared to the PPI-based
@@ -1145,15 +1145,15 @@ L<http://search.cpan.org/dist/Devel-DumpTrace/>
 
 =head1 SEE ALSO
 
-L<perl5db.pl|"dumpvar.pl">, as used by the Perl debugger.
+L<"dumpvar.pl"|perl5db.pl>, as used by the Perl debugger.
 
-L<Devel::Trace|"Devel::Trace">, L<PadWalker|"PadWalker">.
+L<Devel::Trace|Devel::Trace>, L<PadWalker|PadWalker>.
 
-L<Devel::DumpTrace::PPI|"Devel::DumpTrace::PPI"> is part of this 
-distribution and provides similar functionality using L<PPI|"PPI"> 
+L<Devel::DumpTrace::PPI|Devel::DumpTrace::PPI> is part of this 
+distribution and provides similar functionality using L<PPI|PPI> 
 to parse the source code.
 
-L<Devel::TraceVars|"Devel::TraceVars"> is a very similar effort to
+L<Devel::TraceVars|Devel::TraceVars> is a very similar effort to
 C<Devel::DumpTrace>, but this
 module handles arrays, hashes, references, objects, lexical C<our>
 variables, and addresses more edge cases.

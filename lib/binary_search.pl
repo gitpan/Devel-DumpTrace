@@ -1,6 +1,13 @@
-# Devel::DumpTrace use case:
-# broken binary search function.
+# This file demonstrates a use case of Devel::DumpTrace:
+# debugging a binary search function.
+# Eventually:
+#    the other documentation will refer to this file
+#    there will be another file with the fixed function
 
+
+
+
+# ...
 # so we have written this binary search function:
 
 sub binary_search {
@@ -45,12 +52,11 @@ BEGIN { $Devel::DumpTrace::TRACE = 0 };
 
 $Devel::DumpTrace::TRACE = 'verbose';
   
-$ww = binary_search("lazy", @w);
-print "\$ww is $ww, should be 1.\n";
+$ww = binary_search($w[4], @w);
+print "\$ww is $ww, should be 4.\n";
 
 $Devel::DumpTrade::TRACE = 0;
 
-
-
+# Examine the output. Can you spot the error? Can you fix it?
 
 

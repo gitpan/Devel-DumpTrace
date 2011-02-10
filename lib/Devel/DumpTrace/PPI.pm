@@ -16,7 +16,7 @@ croak "Devel::DumpTrace::PPI may not be used when \$Devel::DumpTrace::NO_PPI ",
 eval {use PPI;1}
   or croak "PPI not installed. Can't use Devel::DumpTrace::PPI module";
 
-our $VERSION = '0.07';
+our $VERSION = '0.08';
 our $IMPLICIT_ = 1;
 
 # built-in functions that may use $_ implicitly
@@ -78,11 +78,12 @@ sub get_source {
 	$parent = $parent->parent;
       }
 
-      # 0.07: what whitespace and comments are there between the last code token
+      # 0.07:what whitespace and comments are there between the last code token
       #       of a statement and a ';' structure element? Remove them if there
       #       is more than one.
       my @tokens = $element->tokens();
       if (@tokens > 3 && ref($tokens[-1]) eq 'PPI::Token::Structure' && $tokens[-1] eq ';') {
+
 	my $j = -2;
 	while (defined($tokens[$j]) 
 	       && (ref($tokens[$j]) eq 'PPI::Token::Whitespace' 
@@ -376,11 +377,26 @@ sub preval {
     if (ref $e[$i] eq 'PPI::Token::Symbol') {
       next if $e[$i]->{_DEFER};
       perform_variable_substitution(@e, $i, $style, $pkg);
+      if ($i > 0 && ref($e[$i-1]) eq 'PPI::Token::Cast') {
+	if ($e[$i-1] eq '@' && $e[$i] =~ /^\[(.*)\]$/) {
+
+	  # @$a => @[1,2,3]   should render as   @$a => (1,2,3)
+
+	  $e[$i-1] = '';
+	  $e[$i] = '(' . substr($e[$i],1,-1) . ')';
+	} elsif ($e[$i-1] eq '%' && $e[$i] =~ /^\{(.*)\}$/) {
+
+	  # render  %$a  as  ('a'=>1;'b'=>2) , not  %{'a'=>1;'b'=>2}
+
+	  $e[$i-1] = '';
+	  $e[$i] = '(' . substr($e[$i],1,-1) . ')';
+	}
+      }
     } elsif (ref $e[$i] eq 'PPI::Token::Magic') {
       next if $e[$i]->{_DEFER};
       perform_variable_substitution(@e, $i, $style, '<magic>');
     } elsif (ref($e[$i]) =~ /PPI::Token/) {
-      $e[$i] = "$e[$i]";
+      $e[$i] = "$e[$i]" if ref($e[$i]) ne 'PPI::Token::Cast';
     } else {
       $e[$i] = [ preval($e[$i],$style,$pkg) ];
     }
@@ -483,7 +499,7 @@ Devel::DumpTrace::PPI - PPI-based version of Devel::DumpTrace
 
 =head1 VERSION
 
-0.07
+0.08
 
 =head1 SYNOPSIS
 
@@ -610,7 +626,26 @@ expressions
 
 =item * Can insert implicitly used C<$_>, C<@_>, C<@ARGV> variables
 
-    $ perl -d:DumpTrace::PPI=verbose -e '$_=pop;' -e 'print m/hello/ && sin' hello
+C<$_> is often used as an implicit target of regular expressions
+or an implicit argument to many standard functions. 
+C<@_> and C<@ARGV> are often implicitly used as arguments to
+C<shift> or C<pop>. This module can identify some places where
+these variables are used implicitly and include their values
+in the trace output.
+
+    $ perl -d:DumpTrace::PPI=verbose -e '$_=pop;' \
+          -e 'print m/hello/ && sin' hello
+
+    >>    -e:1:
+    >>>              $_=pop;
+    >>>>             $_=pop ('hello');
+    >>>>>            'hello'=pop ('hello');
+    -------------------------------------------
+    >>    -e:2:
+    >>>              print m/hello/ && sin
+    >>>>             print 'hello'=~m/hello/ && sin $_
+    0>>>>>           print 'hello'=~m/hello/ && sin 'hello'
+    -------------------------------------------
 
 =back
 

@@ -1,5 +1,11 @@
 Revision history for Devel-DumpTrace
 
+0.08    2011-02-10
+        More efficiency improvements for abbreviating large arrays and hashes.
+        Fix in Text/Shorten.pm that for code that was incompatible with
+        Perl v5.8.
+	More PPI tweaks to improve displayed results.
+
 0.07    2011-02-08
         Rename $XTRACE_FH to $DUMPTRACE_FH and XTRACE_xxx env vars to 
         DUMPTRACE_xxx.
