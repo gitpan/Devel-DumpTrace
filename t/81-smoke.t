@@ -26,17 +26,19 @@ for my $level (1, 2, 3) {
 
   ok(@xh == 4, "smoke output has 4 lines level=$level") or $keep++;
 
-  ok($xh[0] eq ">>>>> lib/demo.pl:3:\t" . '$a:1 = 1;' . $/, 
+  ok($xh[0] =~ m{^>>>>> lib/demo.pl:3:.*\$a:1 = 1;},
      "level=$level line 1 ok") or $keep++;
 
-  ok($xh[1] eq ">>>>> lib/demo.pl:4:\t" . '$b:3 = 3;' . $/,
+  ok($xh[1] =~ m{^>>>>> lib/demo.pl:4:.*\$b:3 = 3;},
      "level=$level line 2 ok") or $keep++;
 
-  ok($xh[2] eq ">>>>> lib/demo.pl:5:\t" . '$c:23 = 2 * $a:1 + 7 * $b:3;' . $/,
+  ok($xh[2] =~ m{^>>>>> lib/demo.pl:5:.*\$c:23 = 2 \* \$a:1 \+ 7 \* \$b:3;},
      "level=$level line 3 ok") or $keep++;
 
-  ok($xh[3] eq ">>>>> lib/demo.pl:6:\t" .
-         '@d:(1,3,26) = ($a:1, $b:3, $c:23 + $b:3);' . $/,
+  ok($xh[3] =~ m{^>>>>>[ ]lib/demo.pl:6:
+		 .*\@d:\(1,3,26\)[ ]
+		 =[ ]\(\$a:1,[ ]\$b:3,
+                 [ ]\$c:23[ ]\+[ ]\$b:3\);}x,
      "level=$level line 4 ok")
     or diag("\$xh[3] => $xh[3] ",$keep++);
 

@@ -6,7 +6,7 @@ BEGIN {
 }
 use Devel::DumpTrace;
 
-sub import {
+sub Devel::DumpTrace::noPPI::import {
   return Devel::DumpTrace::import(@_);
 }
 

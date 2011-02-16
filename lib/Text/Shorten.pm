@@ -129,8 +129,6 @@ sub shorten_scalar {
       }
       next;
     }
-
-    print STDERR "\t\t $sign / $d1 / $d / $d2 / $e / $exp \n";
   }
 
   $d = '' if $d2 eq '';

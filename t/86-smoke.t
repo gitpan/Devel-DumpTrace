@@ -99,7 +99,9 @@ for my $pkg (0,1,2) {
   ok($xh[2] !~ $uneval_lhs,
      "level $level seperate line for evaluate lhs") or $keep++;
 
-  ok($xh[3] eq $xh[-1] && substr($xh[3],0,10) eq '-' x 10,
+  my @sep = grep { /----------/ } @xh;
+  ok(@sep > 0 && $sep[0] eq $sep[-1],
+# ok($xh[3] eq $xh[-1] && substr($xh[3],0,10) eq '-' x 10,
      "level $level output has separator lines") or $keep++;
 
   unlink $file unless $keep;

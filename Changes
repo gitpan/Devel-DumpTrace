@@ -1,22 +1,33 @@
 Revision history for Devel-DumpTrace
 
+0.09    2011-02-16
+        Defer output of statements containing function calls until after the
+	    function call completes.
+        Refresh pads to evaluate lexical where assignment and declaration are
+            in the same statement. That is, we now get  my $x=7 --> my $x:7=7
+            and not my $x=7 --> my $x:undef=7.
+        Implemented special handling of C-style for loops, while/until loops,
+            if/elsif/else statements to show expressions that were implicitly
+            evaluated between potential breakpoints in the trace output.
+        Include subroutine name in trace output.
+
 0.08    2011-02-10
         More efficiency improvements for abbreviating large arrays and hashes.
         Fix in Text/Shorten.pm that for code that was incompatible with
-        Perl v5.8.
+            Perl v5.8.
 	More PPI tweaks to improve displayed results.
 
 0.07    2011-02-08
         Rename $XTRACE_FH to $DUMPTRACE_FH and XTRACE_xxx env vars to 
-        DUMPTRACE_xxx.
+            DUMPTRACE_xxx.
         PPI tweaks to improve displayed results.
         Made Devel::DumpTrace::PPI the default module (when PPI is available)
-        and added Devel::DumpTrace::noPPI to explicitly use non-PPI version.
+            and added Devel::DumpTrace::noPPI to explicitly use non-PPI vers.
         Efficiency improvements for abbreviating large arrays and hashes.
 
 0.06    2011-02-01
-        Rename distribution from Devel-XTrace to Devel-DumpTrace. Release 
-        candidate.
+        Rename distribution from Devel-XTrace to Devel-DumpTrace.
+        Release candidate.
 
 0.05    2011-01-31
         PPI fixes. Added smoke tests. 

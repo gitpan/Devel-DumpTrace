@@ -1,12 +1,12 @@
 #
 # tied hash object that maintains two additional states:
 #   1. a parallel hash table where all original keys and values
-#      are run through &Devel::DumpTrade::dump_scalar
-#   2. a cache of results from Text::Shorten::shorten_hash
+#      are run through  &Devel::DumpTrade::dump_scalar
+#   2. a cache of results from  Text::Shorten::shorten_hash
 #
-# Calls to Devel::DumpTrace::hash_repr should not trigger calls
-# to Text::Shorten::shorten_hash unless the hash table
-# has been updated.
+# Calls to  Devel::DumpTrace::hash_repr  should not trigger calls
+# to  Text::Shorten::shorten_hash  unless the hash table
+# has been updated since the last  shorten_hash  call.
 #
 
 package Devel::DumpTrace::CachedDisplayedHash;

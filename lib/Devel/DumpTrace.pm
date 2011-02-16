@@ -1,5 +1,6 @@
 package Devel::DumpTrace;
 
+use 5.008;
 use PadWalker;
 use Scalar::Util;
 use Text::Shorten;
@@ -10,24 +11,28 @@ use strict;
 use warnings;
 $| = 1;
 
-use constant DISPLAY_NONE => 0;   # trace off
+use constant DISPLAY_NONE  => 0;  # trace off
 use constant DISPLAY_TERSE => 1;  # concise - 1 trace line per stmnt
 use constant DISPLAY_GABBY => 4;  # verbose - 2-5 trace lines per stmt
 use constant ABBREV_STRONG => 0;  # strong abbreviation of long scalars,
 use constant ABBREV_MILD   => 1;  # mild abbreviation      arrays, hashes
 use constant ABBREV_NONE   => 2;  # no abbreviation
 
+# include subroutine name in trace output?
+use constant OUTPUT_SUB => 1;
+
 # for interpreting list output of  caller
 use constant CALLER_PKG => 0;     # package name
 use constant CALLER_SUB => 3;     # current subroutine name
 
-our $VERSION = '0.08';
+our $VERSION = '0.09';
 our $ARRAY_ELEM_SEPARATOR = ',';
 our $HASH_ENTRY_SEPARATOR = ';';
 our $HASH_PAIR_SEPARATOR = '=>';
 our $XEVAL_SEPARATOR = ':';
-our $TRACE;
 our $SEPARATOR = "-------------------------------------------\n";
+
+our $TRACE;
 *Devel::Trace::TRACE = \$TRACE;
 tie $TRACE, 'Devel::DumpTrace::VerboseLevel';
 $TRACE = 'default';
@@ -41,8 +46,9 @@ our %EXCLUDE_PKG = ('Devel::DumpTrace' => 1,
 		    'Devel::DumpTrace::CachedDisplayedHash' => 1,
 		    'Devel::DumpTrace::CachedDisplayedArray' => 1,);
 our %INCLUDE_PKG = ('main' => 1);
-
-my (@deferred, $deferred_pkg, $pad_my, $pad_our, @matches);
+our %DEFERRED;
+our ($pad_my, $pad_our);
+my (@matches);
 my @_INC = @lib::ORIG_INC ? @lib::ORIG_INC : @INC;
 
 # these variables are always qualified into the 'main' package,
@@ -54,7 +60,7 @@ my %ALWAYS_MAIN = (ENV => 1, INC => 1, ARGV => 1, ARGVOUT => 1,
 my %esc = ("\a" => '\a', "\b" => '\b', "\t" => '\t', "\n" => '\n',
 	   "\f" => '\f', "\r" => '\r', "\e" => '\e',);
 
-*DB::DB = *DB__DB unless defined &DB::DB;
+*DB::DB = \&DB__DB unless defined &DB::DB;
 
 if (defined $ENV{DUMPTRACE_FH}) {
   if (uc $ENV{DUMPTRACE_FH} eq 'STDOUT') {
@@ -71,10 +77,17 @@ if (defined $ENV{DUMPTRACE_LEVEL}) {
   $TRACE = $ENV{DUMPTRACE_LEVEL};
 }
 
+
+our $_GLOBAL_DESTRUCTION = 0;
 END {
+  my $sep2 = _display_style() > DISPLAY_TERSE;
+  $_GLOBAL_DESTRUCTION = 1;
   if ($$ == $pid) {
     no warnings 'redefine';
-    handle_deferred_output();
+    handle_ALL_deferred_output();
+    $sep2 && separate2();
+    untie $TRACE;
+    $TRACE = 0;
     *DB::DB = sub { };
     if ($DUMPTRACE_FH ne *STDERR && $DUMPTRACE_FH ne *STDOUT) {
       close $DUMPTRACE_FH;
@@ -93,16 +106,20 @@ sub import {
 sub DB__DB {
   return unless $Devel::DumpTrace::TRACE;
 
-  my ($p, $f, $l) = caller;
+  my ($p, $f, $l) = caller();
+  my (undef, undef, undef, $sub) = caller(1);
+  $sub ||= '__top__';
+  $sub =~ s/::$/::__top__/;
+
   return if _exclude_pkg($f,$p,$l);
   return if _display_style() == DISPLAY_NONE;
-  handle_deferred_output();
+  handle_deferred_output($sub, $f);
 
   my $code = get_source($f,$l);
 
   save_pads(1);
   save_previous_regex_matches();
-  evaluate_and_display_line($code, $p, $f, $l);
+  evaluate_and_display_line($code, $p, $f, $l, $sub);
   return;
 }
 
@@ -164,17 +181,46 @@ sub _package_style {
 
 sub save_pads {
   my $n = shift || 0;
+  my $target_depth = current_depth() - $n - 1;
+
+  if ($target_depth < 0) {
+    Carp::cluck "save_pads: request for negative frame ",
+	current_depth(), " $target_depth $n at ";
+    return;
+  }
+
   $pad_my = PadWalker::peek_my($n + 1);
   $pad_our = PadWalker::peek_our($n + 1);
+
+  # add extra data to the pads so that they can be refreshed.
+  $pad_my->{__DEPTH__} = $pad_our->{__DEPTH__} = current_depth() - $n - 1;
   return;
 }
 
+sub current_depth {
+  my $n = 0;
+  $n++ while caller($n);
+  return $n-1;
+}
+
+sub refresh_pads {
+  return if $_GLOBAL_DESTRUCTION;
+  my $current = current_depth();
+  my $target = $pad_my->{__DEPTH__};
+  save_pads($current - $target);
+}
+
+sub get_pads {
+  return ($pad_my, $pad_our);
+}
+
 sub evaluate_and_display_line {
-  my ($code, $p, $f, $l) = @_;
+  my ($code, $p, $f, $l, $sub) = @_;
   my $style = _display_style();
 
   if ($style > DISPLAY_TERSE) {
-    print {$DUMPTRACE_FH} ">>    $f:$l:\n";    # [file & line]
+    separate2();
+    print {$DUMPTRACE_FH} ">>    ", current_position_string($f,$l,$sub), "\n";
     print {$DUMPTRACE_FH} ">>> \t\t $code";  # [orig]
   }
 
@@ -188,34 +234,78 @@ sub evaluate_and_display_line {
     } else {
       $expr2 = perform_variable_substitutions($op . $expr2, $p);
     }
-    @deferred = ($expr1, $expr2);
-    $deferred_pkg = $p;
+
+    $DEFERRED{"$sub : $f"}
+      = { PACKAGE => $p,
+	  MY_PAD  => $pad_my,
+	  OUR_PAD => $pad_our,
+	  SUB     => $sub,
+	  FILE    => $f,
+	  LINE    => $l,
+          DISPLAY_FILE_AND_LINE => $style <= DISPLAY_TERSE,
+	  EXPRESSION => [ $expr1, $expr2 ] 
+	};
+
     if ("$expr1$expr2" ne $code) {
       if ($style >= DISPLAY_GABBY) {
 	print {$DUMPTRACE_FH} ">>>> \t\t $expr1$expr2";  # [pre eval]
       }
     }
-    if ($style <= DISPLAY_TERSE) {
-      push @deferred, $f, $l;
-    }
     return;
   }
 
-  my $xcode = perform_variable_substitutions($code, $p);
+  my $xcode;
+
+  # if this is a simple lexical declaration and NOT an assignment,
+  # then don't perform variable substitution:
+  #          my $k;
+  #          my ($a,$b,@c);
+  #          our $XXX;
+
+  if ($code    =~ /^ \s* (my|our) \s*
+                    [\$@%*\(] /x           # lexical declaration
+      && $code =~ / (?<!;) .* ;
+                    \s* (\# .* )? $/x   # single statement, single line
+      && $code !~ /=/) {                # NOT an assignment
+
+    $xcode = $code;
+
+  } else {
+
+    $xcode = perform_variable_substitutions($code, $p);
+
+  }
 
   if ($style >= DISPLAY_GABBY) {
     if ($xcode ne $code) {
       print {$DUMPTRACE_FH} ">>>> \t\t $xcode";     # [pre eval]
     }
-    print {$DUMPTRACE_FH} $SEPARATOR;
+    separate();
   } elsif ($style == DISPLAY_TERSE) {
-    print {$DUMPTRACE_FH} ">>>>  $f:$l:\t\t $xcode";
+    print {$DUMPTRACE_FH} ">>>>  ", 
+      current_position_string($f,$l,$sub),"\t\t $xcode";
   }
   return;
 }
 
+sub separate {
+}
+
+sub separate1 {
+  $Devel::DumpTrace::SEPARATOR_USED++ &&
+  print {$DUMPTRACE_FH} "-------------------------------------------\n";
+}
+
+sub separate2 {
+  separate1();
+}
+
 sub dump_scalar {
-  my $scalar = shift;
+  my $scalar = $_[0];
+  # was  my $scalar = shift   and was   my ($scalar) = @_;
+  # but they caused "Modification of a read-only value attempted"
+  # error with Perl 5.8.8
+
   return 'undef' if !defined $scalar;
   if (Scalar::Util::looks_like_number($scalar)) {
     $scalar =~ s/^\s+//;
@@ -394,20 +484,45 @@ sub array_repr {
   return $ref . join $ARRAY_ELEM_SEPARATOR, @r;
 }
 
+sub handle_ALL_deferred_output {
+  foreach my $context (keys %DEFERRED) {
+    my ($sub, $file) = split / : /, $context, 2;
+
+#print {$DUMPTRACE_FH} "DEFERRED OUTPUT FROM: $sub $file\n";
+
+    handle_deferred_output($sub, $file);
+  }
+}
+
 sub handle_deferred_output {
-  if (@deferred) {
-    # make post-eval adjustments to deferred output.
-    my ($expr1, $expr2, $file, $line) = @deferred;
-    if (defined $file) {
-      print {$DUMPTRACE_FH} ">>>>> $file:$line:\t",
-	perform_extended_variable_substitutions($expr1, $deferred_pkg),
+
+  my ($sub, $file) = @_;
+  my $deferred = delete $DEFERRED{"$sub : $file"};
+  if (defined $deferred) {
+
+    my ($expr1, $expr2) = @{$deferred->{EXPRESSION}};
+    my $deferred_pkg = $deferred->{PACKAGE};
+    $pad_my = $deferred->{MY_PAD};
+    $pad_our = $deferred->{OUR_PAD};
+    refresh_pads();
+    $pad_my->{__STALE__} = $deferred->{MY_PAD};
+    $pad_our->{__STALE__} = $deferred->{OUR_PAD};
+    my ($line);
+    if ($deferred->{DISPLAY_FILE_AND_LINE}) {
+      $file = $deferred->{FILE};
+      $line = $deferred->{LINE};
+    }
+    if (defined($line)) {
+      print {$DUMPTRACE_FH} ">>>>> ", 
+	current_position_string($file,$line,$deferred->{SUB}), 
+	"\t", perform_extended_variable_substitutions($expr1, $deferred_pkg),
 	$expr2;
     } else {
       print {$DUMPTRACE_FH} ">>>>>\t\t ",
 	perform_variable_substitutions($expr1, $deferred_pkg), $expr2;
-      print {$DUMPTRACE_FH} $SEPARATOR;
+      separate();
     }
-    @deferred = ();
+#   @deferred = ();
   }
   return;
 }
@@ -423,6 +538,20 @@ sub perform_variable_substitutions {
              }gex;
 
   return $xcode;
+}
+
+sub current_position_string {
+  my ($file, $line, $sub) = @_;
+  if (OUTPUT_SUB) {
+    $sub ||= '__top__';
+    # $file already probably contains package information.
+    # Keeping it in $sub is _usually_ redundant and makes the
+    # line too long.
+    $sub =~ s/.*:://;
+    return "$file:$line:[$sub]:";
+  } else {
+    return "$file:$line:";
+  }
 }
 
 sub perform_extended_variable_substitutions {
@@ -464,6 +593,11 @@ sub evaluate {
       $v = $pad_my->{$sigvar};
     } elsif (defined $pad_our->{$sigvar}) {
       $v = $pad_our->{$sigvar};
+    } elsif (defined $pad_my->{__STALE__}{$sigvar}) {
+      $v = $pad_my->{__STALE__}{$sigvar};
+print {$DUMPTRACE_FH} "GOT STALE $sigvar FROM MY PAD\n";
+    } elsif (defined $pad_our->{__STALE__}{$sigvar}) {
+      $v = $pad_our->{__STALE__}{$sigvar};
     } else {
       $v = eval "\\$pkgvar";                    ## no critic (StringyEval)
     }
@@ -676,7 +810,7 @@ Devel::DumpTrace - Evaluate and print out each line before it is executed.
 
 =head1 VERSION
 
-0.08
+0.09
 
 =head1 SYNOPSIS
 
@@ -690,7 +824,7 @@ Devel::DumpTrace - Evaluate and print out each line before it is executed.
 
 =head1 DESCRIPTION
 
-L<"Similar to Devel::Trace"|Devel::Trace>, this module will cause a message
+L<Similar to Devel::Trace|Devel::Trace>, this module will cause a message
 to be printed to standard error for each line of source code that is
 executed. In addition, this module will attempt to identify variable names
 in the source code and substitute the values of those variables. In this
@@ -741,7 +875,7 @@ See C<$Devel::DumpTrace::TRACE> under the L</"VARIABLES"> section
 for more details about the different levels of verbosity.
 
 This distribution comes with both a basic parser and a
-L<"PPI-based parser"|Devel::DumpTrace::PPI>. If the L<PPI|PPI>
+L<PPI-based parser|Devel::DumpTrace::PPI>. If the L<PPI|PPI>
 module is installed on your system, then this module will automatically
 use the PPI-based parser to analyze the traced code. You can
 force this module to use the basic parser by running with the
@@ -815,8 +949,8 @@ in the same line of output. Values of long scalars, long arrays, or
 long hash tables are heavily abbreviated:
 
     $ perl -d:DumpTrace=1 littledemo.pl
-    >>>>> littledemo.pl:1:  @a:(1,2,3,4,5,6,...,40) = (1 .. 40);
-    >>>>> littledemo.pl:2:  $b:5 = $a:(1,2,3,4,5,6,...,40)[4];
+    >>>>> littledemo.pl:1:[__top__]:  @a:(1,2,3,4,5,6,...,40) = (1 .. 40);
+    >>>>> littledemo.pl:2:[__top__]:  $b:5 = $a:(1,2,3,4,5,6,...,40)[4];
 
 =item C<$Devel::DumpTrace::TRACE> == 2
 
@@ -826,10 +960,10 @@ in the same line of output. Values of long scalar, arrays, and hashes
 are less heavily abbreviated.
 
     $ perl -I. -d:DumpTrace=2 littledemo.pl
-    >>>>> littledemo.pl:1:  @a:(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,  \
-        18,19,20,21,22,23,24,25,26,27,...,40) = (1 .. 40);
-    >>>>> littledemo.pl:2:  $b:5 = $a:(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15, \
-        16,17,18,19,20,21,22,23,24,25,26,27,...,40)[4];
+    >>>>> littledemo.pl:1:[__top__]:  @a:(1,2,3,4,5,6,7,8,9,10,11,12,13,14, \
+        15,16,17,18,19,20,21,22,23,24,25,26,27,...,40) = (1 .. 40);
+    >>>>> littledemo.pl:2:[__top__]:  $b:5 = $a:(1,2,3,4,5,6,7,8,9,10,11,12, \
+        13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,...,40)[4];
 
 =item C<$Devel::DumpTrace::TRACE> == 3
 
@@ -841,12 +975,12 @@ abbreviated at all. B<This is the default setting for the
 module>.
 
     $ perl -I. -d:DumpTrace=3 littledemo.pl
-    >>>>> littledemo.pl:1:  @a:(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17, \
-        18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39, \
-        40) = (1 .. 40);
-    >>>>> littledemo.pl:2:  $b:5 = $a:(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15, \
-        16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37, \
-        38,39,40)[4];
+    >>>>> littledemo.pl:1:[__top__]:  @a:(1,2,3,4,5,6,7,8,9,10,11,12,13,14, \
+        15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37, \
+        38,39,40) = (1 .. 40);
+    >>>>> littledemo.pl:2:[__top__]:  $b:5 = $a:(1,2,3,4,5,6,7,8,9,10,11,12, \
+        13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35, \
+        36,37,38,39,40)[4];
 
 =item C<$Devel::DumpTrace::TRACE> == 4
 
@@ -870,12 +1004,12 @@ A separator line will also be displayed between statements.
 Long scalar, arrays, and hashes may be abbreviated. Example output:
 
     $ perl -d:DumpTrace=4 littledemo.pl
-    >>  littledemo.pl:1:
+    >>  littledemo.pl:1:[__top__]:
     >>>              @a = (1 .. 40);
     >>>>>            (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20, \
         21,22,23,24,25,26,27,...,40) = (1 .. 40);
     -------------------------------------------
-    >>  littledemo.pl:2:
+    >>  littledemo.pl:2:[__top__]:
     >>>              $b = $a[4] + $a[5];
     >>>>             $b = (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19, \
         20,21,22,23,24,25,26,27,...,40)[4];
@@ -888,12 +1022,12 @@ Long scalar, arrays, and hashes may be abbreviated. Example output:
 Like C<$TRACE> 4, but long scalars, arrays, and hashes are B<not> abbreviated.
 
     $ perl -I. -d:DumpTrace=5 littledemo.pl
-    >>  littledemo.pl:1:
+    >>  littledemo.pl:1:[__top__]:
     >>>              @a = (1 .. 40);
     >>>>>            (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21, \
         22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40) = (1 .. 40);
     -------------------------------------------
-    >>  littledemo.pl:2:
+    >>  littledemo.pl:2:[__top__]:
     >>>              $b = $a[4] + $a[5];
     >>>>             $b = (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19, \
         20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40)[4];
@@ -1040,18 +1174,7 @@ statement is evaluated I<before> the statement is executed.
 
 Only the first line of code in an expression is evaluated.
 
-=head3 Lexical decalaration and assignment in same statement is
-not evaluated
-
-    my $q = 5;                        # ==> >>>>> my <undef> = 5;
-
-This fails because the module uses a snapshot of the lexical variable
-pad before the statement is executed. Therefore the pad does not yet
-contain the variable that is being declared. After execution, the
-module examines the old snapshot, which still does not contain the
-new variable.
-
-=head3 Displayed value of C<@_> variable is unreliable
+=head3 Displayed value of @_ variable is unreliable
 
 The displayed value of C<@_> inside a subroutine is subject to
 some of the issues described in L<perlfunc/"caller">:
@@ -1088,8 +1211,8 @@ inside non-interpolated quotes.
 It would be nice if this parser could detect when Perl was
 implicitly using some variables and display the implicit variable.
 
-    /expression/;        # should be  $_ =~ /expression/
-    my $self = shift;    # should be  my $self = shift @_;
+    /expression/;        # actually  $_ =~ /expression/
+    my $self = shift;    # actually  my $self = shift(@_);
 
 That is not currently a capability of this module.
 
@@ -1145,7 +1268,7 @@ L<http://search.cpan.org/dist/Devel-DumpTrace/>
 
 =head1 SEE ALSO
 
-L<"dumpvar.pl"|perl5db.pl>, as used by the Perl debugger.
+L<dumpvar.pl|perl5db.pl>, as used by the Perl debugger.
 
 L<Devel::Trace|Devel::Trace>, L<PadWalker|PadWalker>.
 
@@ -1157,6 +1280,10 @@ L<Devel::TraceVars|Devel::TraceVars> is a very similar effort to
 C<Devel::DumpTrace>, but this
 module handles arrays, hashes, references, objects, lexical C<our>
 variables, and addresses more edge cases.
+
+L<Tie::Trace|Tie::Trace> provides facilities to watch the values
+of specific variables, including stack trace information about
+where and how the variables values were changed.
 
 =head1 AUTHOR
 

@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               Devel-DumpTrace
-version:            0.08
+version:            0.09
 abstract:           Evaluate and print out each line before it is executed.
 author:
     - Marty O'Brien <mob@cpan.org>
@@ -11,7 +11,7 @@ configure_requires:
 build_requires:
     ExtUtils::MakeMaker:  0
 requires:
-    PadWalker:     0
+    PadWalker:     1.5
     Scalar::Util:  1.14
     Test::More:    0
 no_index:

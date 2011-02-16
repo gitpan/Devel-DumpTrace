@@ -1,12 +1,12 @@
 #
 # tied array object that maintains two additional states:
 #   1. a parallel array where all original entries
-#      are run through &Devel::DumpTrade::dump_scalar
-#   2. a cache of results from Text::Shorten::shorten_hash
+#      are run through  &Devel::DumpTrade::dump_scalar
+#   2. a cache of results from  Text::Shorten::shorten_hash
 #
-# Calls to Devel::DumpTrace::array_repr should not trigger calls
-# to Text::Shorten::shorten_array unless the array
-# has been updated.
+# Calls to  Devel::DumpTrace::array_repr  should not trigger calls
+# to  Text::Shorten::shorten_array  unless the array
+# has been updated since the last  shorten_array  call.
 #
 
 package Devel::DumpTrace::CachedDisplayedArray;
@@ -21,16 +21,16 @@ use Carp;
 sub TIEARRAY {
   my ($class, @list) = @_;
 
-  # HASH:  the original and primary hash table
+  # ARRAY:  the original and primary hash table
 
-  # PHASH: copy of HASH where all keys and values are
-  #        filtered through Devel::DumpTrace::dump_scalar;
+  # PARRAY: copy of HASH where all keys and values are
+  #         filtered through Devel::DumpTrace::dump_scalar;
 
-  # CACHE: store of results from Text::Shorten. Keys are
-  #        auxiliary arguments to Text::Shorten::shorten_hash,
-  #        values are array refs of shorten_hash return values.
-  #        Cache is cleared when any element of the hash
-  #        is changed.
+  # CACHE:  store of results from Text::Shorten. Keys are
+  #         auxiliary arguments to Text::Shorten::shorten_array,
+  #         values are array refs of shorten_array return values.
+  #         Cache is cleared when any element of the array
+  #         is changed.
 
   my $self = {
 	      CACHE => {},

@@ -33,7 +33,7 @@ WriteMakefile(
     PL_FILES            => {},
     PREREQ_PM => {
         'Test::More' => 0,
-	'PadWalker' => 0,
+	'PadWalker' => 1.5,
         'Scalar::Util' => '1.14',     # 1.14 has improved reftype()
     },
     dist                => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },

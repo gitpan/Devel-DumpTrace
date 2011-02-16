@@ -23,7 +23,7 @@ system($^X, "-e", "exit 4");
 
 save_pads(0);
 my $line = __LINE__ + 3;
-evaluate_and_display_line('$status = $?;'."\n", __PACKAGE__, __FILE__, $line);
+evaluate_and_display_line('$status = $?;'."\n", __PACKAGE__, __FILE__, $line, '__top__');
 $status = $?;
-Devel::DumpTrace::handle_deferred_output();
+Devel::DumpTrace::handle_deferred_output('__top__', __FILE__);
 ok(1);

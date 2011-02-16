@@ -51,4 +51,6 @@ t/ppi/81-smoke.t
 t/ppi/82-smoke.t
 t/ppi/83-smoke.t
 t/ppi/86-smoke.t
+t/ppi/88-smoke.t
+
 META.yml                                 Module meta-data (added by MakeMaker)
