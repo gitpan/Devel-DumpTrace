@@ -1,5 +1,5 @@
 Devel-DumpTrace
-------------
+---------------
 
 A debugging module that displays the statements being executed,
 substituting variable identifiers with their values.
@@ -14,20 +14,20 @@ Example:
     @d = ($a, $b, $c + $b);
 
     $ perl -d:DumpTrace=verbose demo.pl
-    >>  demo.pl:2:
+    >>  demo.pl:2:[__top__]:
     >>>              $a = 1;
     >>>>>            1 = 1;
     -------------------------------------------
-    >>  demo.pl:3:
+    >>  demo.pl:3:[__top__]:
     >>>              $b = 3;
     >>>>>            3 = 3;
     -------------------------------------------
-    >>  demo.pl:4:
+    >>  demo.pl:4:[__top__]:
     >>>              $c = 2 * $a + 7 * $b;
     >>>>             $c = 2 * 1 + 7 * 3;
     >>>>>            23 = 2 * 1 + 7 * 3;
     -------------------------------------------
-    >>  demo.pl:5:
+    >>  demo.pl:5:[__top__]:
     >>>              @d = ($a, $b, $c + $b);
     >>>>             @d = (1, 3, 23 + 3);
     >>>>>            (1,3,26) = (1, 3, 23 + 3);

@@ -66,6 +66,7 @@ sub CLEAR {
   $self->clear_cache;
   $self->{PHASH} = {};
   $self->{HASH} = {};
+  return;
 }
 
 sub EXISTS {
@@ -76,12 +77,12 @@ sub EXISTS {
 sub FIRSTKEY {
   my $self = shift;
   scalar keys %{$self->{HASH}};
-  each %{$self->{HASH}};
+  return each %{$self->{HASH}};
 }
 
 sub NEXTKEY {
   my ($self, $lastkey) = @_;
-  each %{$self->{HASH}};
+  return each %{$self->{HASH}};
 }
 
 sub SCALAR {
@@ -101,6 +102,7 @@ sub clear_cache {
 sub store_cache {
   my ($self, $key, $value) = @_;
   $self->{CACHE}{$key} = $value;
+  return;
 }
 
 sub get_cache {

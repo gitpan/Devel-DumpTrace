@@ -47,8 +47,10 @@ for my $level (1, 2, 3) {
   my @xh = <XH>;
   close XH;
 
-  ok(@xh == 5, "smoke output has 5 lines level=$level")
-	or diag(@xh, " ", scalar @xh) or $keep++;
+  # 0.10: foreach decorator adds two lines of output
+  ok(@xh >= 5 && @xh <= 7, 
+     "smoke output has 5-7 lines level=$level")
+    or diag(@xh, " ", scalar @xh) or $keep++;
   my (@abbrevs) = grep { /\.\.\./ } @xh;
   ok(@abbrevs = 3 - $level, "smoke output has 3-$level lines abbreviated") or $keep++;
   ok(5 == grep { /\>+\s+$0.pl:\d+\S*:\s+\S/ } @xh,

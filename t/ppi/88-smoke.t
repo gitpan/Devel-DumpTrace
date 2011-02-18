@@ -1,7 +1,7 @@
 use Test::More;
 BEGIN {
   if (eval "use PPI;1") {
-    plan tests => 21;
+    plan tests => 25;
   } else {
     plan skip_all => "PPI not available";
   }
@@ -28,8 +28,11 @@ for (my $i=1; $i<5; $i++) {
 	$k += $j;
 	$j = 0;
     } elsif ($i > 3) {
-	$k -= $j;
-	$j = 0;
+        $j = 0;
+	do {
+	   $k += 2 * $j;
+	   $j++;
+        } until $k > $j;
     } elsif ($i == 2) {
 	until ($j > 50) {
 	    $k -= $j;
@@ -57,7 +60,7 @@ $ENV{DUMPTRACE_LEVEL} = $level;
 
 my $c1 = system($^X, $dmodule, "-Iblib/lib", "-Ilib", "$0.pl");
 
-my $keep = 0;
+my $keep = $ENV{KEEP} || 0;
 
 ok($c1 == 0, "ran level $level") or $keep++;
 
@@ -90,6 +93,12 @@ close XH;
 #         has file/line info, or
 #         is preceded by an ELSIF line
 #     ELSE/ELSIF line with file/line info is preceded by an if line
+#
+#   do/while do/until
+#     line with DO-UNTIL/DO-WHILE does not have file and line information
+#     line before DO-UNTIL/DO-WHILE has file line info
+#     first iteration, line says "do {"
+#         appears before all other DO-UNTIL/DO-WHILE statements
 
 my $FILELINE_INFO = qr/$0.pl:\d+:/;
 
@@ -208,6 +217,32 @@ ok(@else_and_elseif == @else_and_elseif_with_fileline_info +
 ok(@else_and_elseif_with_fileline_info ==
    @else_and_elseif_with_fileline_info_preceded_by_if,
    "ELSEIF/ELSE with file/line info always preceded by if (...)")
+  or $keep++;
+
+################# do-while / do-until ####################
+
+my @do_whileuntil_lines = grep { 
+  $xh[$_] =~ /DO-[A-Z]{5}/
+} 0..$#xh; 
+my @do_whileuntil_lines_with_fileinfo = grep {
+    $xh[$_] =~ /$0.pl:\d+:/
+} @do_whileuntil_lines;
+my @precede_dowhile_lines_with_fileinfo = grep {
+    $xh[$_ - 1] =~ /$0.pl:\d+:/
+} @do_whileuntil_lines;
+
+my @do = grep { $xh[$_] =~ /do\s*\{/ } 0 .. $#xh;
+
+ok(@do_whileuntil_lines > 0,
+   "output has DO-WHILE/DO-UNTIL decorators") or $keep++;
+ok(@do_whileuntil_lines_with_fileinfo == 0,
+   "lines with DO-WHILE/DO-UNTIL do not have file & line info")
+   or $keep++;
+ok(@precede_dowhile_lines_with_fileinfo == @do_whileuntil_lines,
+   "lines that precede DO-WHILE/DO-UNTIL have file & line info")
+   or $keep++;
+ok(@do == 1 && $do[0] < $do_whileuntil_lines[0],
+   "'do' statement appears first")
   or $keep++;
 
 

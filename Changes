@@ -1,12 +1,19 @@
 Revision history for Devel-DumpTrace
 
+0.10    2011-02-18
+        Implemented decorator (see 0.09) for for[each] LIST construction.
+	Implemented decorator for do-while and do-until constructions.
+        Fixed PPI parsing to treat source code specified from -e, eval, or
+            standard input the same as code from a file.
+        Fixed bug about inappropriate implicit $_ inserted after builtins.
+
 0.09    2011-02-16
         Defer output of statements containing function calls until after the
 	    function call completes.
         Refresh pads to evaluate lexical where assignment and declaration are
             in the same statement. That is, we now get  my $x=7 --> my $x:7=7
             and not my $x=7 --> my $x:undef=7.
-        Implemented special handling of C-style for loops, while/until loops,
+        Implemented "decorators" for C-style for loops, while/until loops,
             if/elsif/else statements to show expressions that were implicitly
             evaluated between potential breakpoints in the trace output.
         Include subroutine name in trace output.

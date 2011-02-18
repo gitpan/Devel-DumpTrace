@@ -12,6 +12,9 @@ sub to_PPI_Statement {
   my $code = shift;
   $::doc = new PPI::Document(\$code);  # must keep document in scope
   my $s = $::doc->find('PPI::Statement');
+  for my $ss (@{$s}) {
+    Devel::DumpTrace::__add_implicit_elements($ss);   # added for v0.10
+  }
   return $s->[0];
 }
 
@@ -22,6 +25,7 @@ sub to_PPI_Statement {
 $_ = "FOOasdfBAR";
 my $doc = new PPI::Document(\'m{asdf} && print "Contains asdf\n"');
 my $s = $doc->find('PPI::Statement');
+Devel::DumpTrace::__add_implicit_elements($s->[0]);
 my @z = preval($s->[0], 1, __PACKAGE__);
 ok("@z" =~ /\$_:.*$_.*=~\s*m\{asdf\}/,
    "implicit \$_=~ inserted before regexp");

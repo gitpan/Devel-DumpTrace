@@ -69,9 +69,11 @@ sub STORESIZE {
     $self->clear_cache;
     $self->POP() for $newcount .. $oldcount-1;
   }
+  return;
 }
 
 sub EXTEND {
+  return;
 }
 
 sub DELETE {
@@ -85,6 +87,7 @@ sub CLEAR {
   $self->clear_cache;
   $self->{PARRAY} = [];
   $self->{ARRAY} = [];
+  return;
 }
 
 sub EXISTS {
@@ -125,8 +128,9 @@ sub UNSHIFT {
   if (@list > 0) {
     $self->clear_cache;
   }
-  unshift @{$self->{ARRAY}}, @list;
-  unshift @{$self->{ARRAY}}, map { dump_scalar($_) } @list;
+  unshift @{$self->{PARRAY}}, map { dump_scalar($_) } @list;
+  my $result = unshift @{$self->{ARRAY}}, @list;
+  return $result;
 }
 
 sub SPLICE {
@@ -151,6 +155,7 @@ sub clear_cache {
 sub store_cache {
   my ($self, $key, $value) = @_;
   $self->{CACHE}{$key} = $value;
+  return;
 }
 
 sub get_cache {

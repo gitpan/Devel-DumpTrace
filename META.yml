@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               Devel-DumpTrace
-version:            0.09
+version:            0.10
 abstract:           Evaluate and print out each line before it is executed.
 author:
     - Marty O'Brien <mob@cpan.org>

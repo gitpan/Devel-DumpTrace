@@ -9,7 +9,7 @@ use Devel::DumpTrace::CachedDisplayedHash;
 use Carp;
 use strict;
 use warnings;
-$| = 1;
+# $| = 1;
 
 use constant DISPLAY_NONE  => 0;  # trace off
 use constant DISPLAY_TERSE => 1;  # concise - 1 trace line per stmnt
@@ -25,29 +25,22 @@ use constant OUTPUT_SUB => 1;
 use constant CALLER_PKG => 0;     # package name
 use constant CALLER_SUB => 3;     # current subroutine name
 
-our $VERSION = '0.09';
+our $VERSION = '0.10';
 our $ARRAY_ELEM_SEPARATOR = ',';
 our $HASH_ENTRY_SEPARATOR = ';';
 our $HASH_PAIR_SEPARATOR = '=>';
 our $XEVAL_SEPARATOR = ':';
 our $SEPARATOR = "-------------------------------------------\n";
 
-our $TRACE;
-*Devel::Trace::TRACE = \$TRACE;
-tie $TRACE, 'Devel::DumpTrace::VerboseLevel';
-$TRACE = 'default';
-
 my $pid = $$;
 our $DUMPTRACE_FH = *STDERR;
 our $DB_ARGS_DEPTH = 3;
-our %EXCLUDE_PKG = ('Devel::DumpTrace' => 1, 
-		    'Text::Shorten' => 1,
-		    'Devel::DumpTrace::VerboseLevel' => 1,
-		    'Devel::DumpTrace::CachedDisplayedHash' => 1,
-		    'Devel::DumpTrace::CachedDisplayedArray' => 1,);
+our %EXCLUDE_PKG = ();
 our %INCLUDE_PKG = ('main' => 1);
-our %DEFERRED;
-our ($pad_my, $pad_our);
+our (%DEFERRED, $PAD_MY, $PAD_OUR, $TRACE);
+our $_GLOBAL_DESTRUCTION = 0;
+our $_INIT = 0;
+
 my (@matches);
 my @_INC = @lib::ORIG_INC ? @lib::ORIG_INC : @INC;
 
@@ -60,39 +53,36 @@ my %ALWAYS_MAIN = (ENV => 1, INC => 1, ARGV => 1, ARGVOUT => 1,
 my %esc = ("\a" => '\a', "\b" => '\b', "\t" => '\t', "\n" => '\n',
 	   "\f" => '\f', "\r" => '\r', "\e" => '\e',);
 
-*DB::DB = \&DB__DB unless defined &DB::DB;
+# use PPI by default, if available
+$Devel::DumpTrace::NO_PPI
+  || $ENV{DUMPTRACE_NOPPI}
+  || eval 'use Devel::DumpTrace::PPI;1';          ## no critic (StringyEval)
 
-if (defined $ENV{DUMPTRACE_FH}) {
-  if (uc $ENV{DUMPTRACE_FH} eq 'STDOUT') {
-    $DUMPTRACE_FH = *STDOUT;
+{
+  *Devel::Trace::TRACE = \$TRACE;
+  tie $TRACE, 'Devel::DumpTrace::VerboseLevel';
+  if (defined $ENV{DUMPTRACE_LEVEL}) {
+    $TRACE = $ENV{DUMPTRACE_LEVEL};
   } else {
-    ## no critic (BriefOpen)
-    unless (open $DUMPTRACE_FH, '>', $ENV{DUMPTRACE_FH}) {
-      die "Can't use $ENV{DUMPTRACE_FH} as trace output file: $!\n",
-	"Devel::DumpTrace module is quitting.\n";
+    $TRACE = 'default';
+  }
+
+  *DB::DB = \&DB__DB unless defined &DB::DB;
+
+  if (defined $ENV{DUMPTRACE_FH}) {
+    if (uc $ENV{DUMPTRACE_FH} eq 'STDOUT') {
+      $DUMPTRACE_FH = *STDOUT;
+    } else {
+      ## no critic (BriefOpen)
+      unless (open $DUMPTRACE_FH, '>', $ENV{DUMPTRACE_FH}) {
+	die "Can't use $ENV{DUMPTRACE_FH} as trace output file: $!\n",
+	  "Devel::DumpTrace module is quitting.\n";
+      }
     }
   }
-}
-if (defined $ENV{DUMPTRACE_LEVEL}) {
-  $TRACE = $ENV{DUMPTRACE_LEVEL};
-}
 
-
-our $_GLOBAL_DESTRUCTION = 0;
-END {
-  my $sep2 = _display_style() > DISPLAY_TERSE;
-  $_GLOBAL_DESTRUCTION = 1;
-  if ($$ == $pid) {
-    no warnings 'redefine';
-    handle_ALL_deferred_output();
-    $sep2 && separate2();
-    untie $TRACE;
-    $TRACE = 0;
-    *DB::DB = sub { };
-    if ($DUMPTRACE_FH ne *STDERR && $DUMPTRACE_FH ne *STDOUT) {
-      close $DUMPTRACE_FH;
-    }
-  }
+  _ignore_packages(qr/^Devel::DumpTrace/, qr/^Text::Shorten$/);
+  _recognize_packages('^main$');
 }
 
 sub import {
@@ -101,6 +91,58 @@ sub import {
     $TRACE = join ',', @_;
   }
   return;
+}
+
+{
+  # routines for initializing %EXCLUDE_PKG, %INCLUDE_PKG
+
+  my @installed_pkgs = ();
+  my %installed_pkgs = ();
+  my %_seen = ();
+
+  sub _ignore_packages {
+    my (@patterns) = @_;
+    foreach my $pattern (@patterns) {
+      foreach my $pkg (grep { $_ =~ $pattern } _find_installed_pkgs()) {
+	$EXCLUDE_PKG{$pkg}++;
+	delete $INCLUDE_PKG{$pkg};
+      }
+    }
+    return;
+  }
+
+  sub _recognize_packages {
+    my (@patterns) = @_;
+    foreach my $pattern (@patterns) {
+      foreach my $pkg (grep { $_ =~ $pattern } _find_installed_pkgs()) {
+	$INCLUDE_PKG{$pkg}++;
+	delete $EXCLUDE_PKG{$pkg};
+      }
+    }
+    return;
+  }
+
+  # recursively walk the symbol table and add any namespaces found
+  # to %installed_pkgs
+  sub _examine_symbol_table_for_installed_pkgs {
+    my ($nspace, $ref) = shift;
+    return if $_seen{$ref=eval'\%::'.$nspace};
+    $_seen{$ref}++;
+    $installed_pkgs{$nspace}++;
+    for (keys %$ref) {
+      _examine_symbol_table_for_installed_pkgs($nspace.$_) if /::$/;
+    }
+    return;
+  }
+
+  sub _find_installed_pkgs {
+    if (0 == @installed_pkgs) {
+      _examine_symbol_table_for_installed_pkgs('');
+      @installed_pkgs = sort keys %installed_pkgs;
+      s/::$// foreach @installed_pkgs;
+    }
+    return @installed_pkgs;
+  }
 }
 
 sub DB__DB {
@@ -189,11 +231,13 @@ sub save_pads {
     return;
   }
 
-  $pad_my = PadWalker::peek_my($n + 1);
-  $pad_our = PadWalker::peek_our($n + 1);
+  $PAD_MY = PadWalker::peek_my($n + 1);
+  $PAD_OUR = PadWalker::peek_our($n + 1);
 
-  # add extra data to the pads so that they can be refreshed.
-  $pad_my->{__DEPTH__} = $pad_our->{__DEPTH__} = current_depth() - $n - 1;
+  # add extra data to the pads so that they can be refreshed
+  # at an arbitrary point in the future
+  $PAD_MY->{__DEPTH__} = $PAD_OUR->{__DEPTH__} = current_depth() - $n - 1;
+
   return;
 }
 
@@ -206,12 +250,9 @@ sub current_depth {
 sub refresh_pads {
   return if $_GLOBAL_DESTRUCTION;
   my $current = current_depth();
-  my $target = $pad_my->{__DEPTH__};
+  my $target = $PAD_MY->{__DEPTH__};
   save_pads($current - $target);
-}
-
-sub get_pads {
-  return ($pad_my, $pad_our);
+  return;
 }
 
 sub evaluate_and_display_line {
@@ -219,7 +260,7 @@ sub evaluate_and_display_line {
   my $style = _display_style();
 
   if ($style > DISPLAY_TERSE) {
-    separate2();
+    separate();
     print {$DUMPTRACE_FH} ">>    ", current_position_string($f,$l,$sub), "\n";
     print {$DUMPTRACE_FH} ">>> \t\t $code";  # [orig]
   }
@@ -237,8 +278,8 @@ sub evaluate_and_display_line {
 
     $DEFERRED{"$sub : $f"}
       = { PACKAGE => $p,
-	  MY_PAD  => $pad_my,
-	  OUR_PAD => $pad_our,
+	  MY_PAD  => $PAD_MY,
+	  OUR_PAD => $PAD_OUR,
 	  SUB     => $sub,
 	  FILE    => $f,
 	  LINE    => $l,
@@ -260,7 +301,7 @@ sub evaluate_and_display_line {
   # then don't perform variable substitution:
   #          my $k;
   #          my ($a,$b,@c);
-  #          our $XXX;
+  #          our $ZZZ;
 
   if ($code    =~ /^ \s* (my|our) \s*
                     [\$@%*\(] /x           # lexical declaration
@@ -280,7 +321,6 @@ sub evaluate_and_display_line {
     if ($xcode ne $code) {
       print {$DUMPTRACE_FH} ">>>> \t\t $xcode";     # [pre eval]
     }
-    separate();
   } elsif ($style == DISPLAY_TERSE) {
     print {$DUMPTRACE_FH} ">>>>  ", 
       current_position_string($f,$l,$sub),"\t\t $xcode";
@@ -289,15 +329,10 @@ sub evaluate_and_display_line {
 }
 
 sub separate {
-}
-
-sub separate1 {
-  $Devel::DumpTrace::SEPARATOR_USED++ &&
-  print {$DUMPTRACE_FH} "-------------------------------------------\n";
-}
-
-sub separate2 {
-  separate1();
+  if ($Devel::DumpTrace::SEPARATOR_USED++) {
+    print {$DUMPTRACE_FH} $SEPARATOR;
+  }
+  return;
 }
 
 sub dump_scalar {
@@ -385,7 +420,6 @@ sub _qquote {
 }
 
 sub hash_repr {
-  # XXX - magic numbers, type names
   my $hashref = shift;
 
   return '' if !defined $hashref;
@@ -440,7 +474,6 @@ sub hash_repr {
 }
 
 sub array_repr {
-  # XXX - magic numbers, type names
   my $arrayref = shift;
 
   return '' if !defined $arrayref;
@@ -487,26 +520,23 @@ sub array_repr {
 sub handle_ALL_deferred_output {
   foreach my $context (keys %DEFERRED) {
     my ($sub, $file) = split / : /, $context, 2;
-
-#print {$DUMPTRACE_FH} "DEFERRED OUTPUT FROM: $sub $file\n";
-
     handle_deferred_output($sub, $file);
   }
+  return;
 }
 
 sub handle_deferred_output {
-
   my ($sub, $file) = @_;
   my $deferred = delete $DEFERRED{"$sub : $file"};
   if (defined $deferred) {
 
     my ($expr1, $expr2) = @{$deferred->{EXPRESSION}};
     my $deferred_pkg = $deferred->{PACKAGE};
-    $pad_my = $deferred->{MY_PAD};
-    $pad_our = $deferred->{OUR_PAD};
+    $PAD_MY = $deferred->{MY_PAD};
+    $PAD_OUR = $deferred->{OUR_PAD};
     refresh_pads();
-    $pad_my->{__STALE__} = $deferred->{MY_PAD};
-    $pad_our->{__STALE__} = $deferred->{OUR_PAD};
+    $PAD_MY->{__STALE__} = $deferred->{MY_PAD};
+    $PAD_OUR->{__STALE__} = $deferred->{OUR_PAD};
     my ($line);
     if ($deferred->{DISPLAY_FILE_AND_LINE}) {
       $file = $deferred->{FILE};
@@ -520,9 +550,7 @@ sub handle_deferred_output {
     } else {
       print {$DUMPTRACE_FH} ">>>>>\t\t ",
 	perform_variable_substitutions($expr1, $deferred_pkg), $expr2;
-      separate();
     }
-#   @deferred = ();
   }
   return;
 }
@@ -531,7 +559,7 @@ sub perform_variable_substitutions {
   my ($xcode, $pkg) = @_;
   $xcode =~ s{  ([\$\@\%])\s*               # sigil
                 ([\w:]+)                    # package (optional) and var name
-                (\s*->)?                    # optional indirection
+                (\s*->)?                    # optional dereference op
                 (\s*[\[\{])?                # optional subscript
              }{ 
                 evaluate($1,$2,$3||'',$4||'',$pkg) 
@@ -556,10 +584,10 @@ sub current_position_string {
 
 sub perform_extended_variable_substitutions {
   my ($xcode, $pkg) = @_;
-  $xcode =~ s{  ([\$\@\%])\s*
-                ([\w:]+)
-                (\s*->)?
-                (\s*[\[\{])?
+  $xcode =~ s{  ([\$\@\%])\s*                   # sigil
+                ([\w:]+)                        # var name, nay include pkg
+                (\s*->)?                        # optional dereference op
+                (\s*[\[\{])?                    # optional subscript
              }{ $1 . $2 . $XEVAL_SEPARATOR
                . evaluate($1,$2,$3||'',$4||'',$pkg)
              }gex;
@@ -589,15 +617,14 @@ sub evaluate {
     my $sigvar = "\$$varname";
     (my $pkgvar = $sigvar) =~ s/\$/\$$pkg/;
 
-    if (defined $pad_my->{$sigvar}) {
-      $v = $pad_my->{$sigvar};
-    } elsif (defined $pad_our->{$sigvar}) {
-      $v = $pad_our->{$sigvar};
-    } elsif (defined $pad_my->{__STALE__}{$sigvar}) {
-      $v = $pad_my->{__STALE__}{$sigvar};
-print {$DUMPTRACE_FH} "GOT STALE $sigvar FROM MY PAD\n";
-    } elsif (defined $pad_our->{__STALE__}{$sigvar}) {
-      $v = $pad_our->{__STALE__}{$sigvar};
+    if (defined $PAD_MY->{$sigvar}) {
+      $v = $PAD_MY->{$sigvar};
+    } elsif (defined $PAD_OUR->{$sigvar}) {
+      $v = $PAD_OUR->{$sigvar};
+    } elsif (defined $PAD_MY->{__STALE__}{$sigvar}) {
+      $v = $PAD_MY->{__STALE__}{$sigvar};
+    } elsif (defined $PAD_OUR->{__STALE__}{$sigvar}) {
+      $v = $PAD_OUR->{__STALE__}{$sigvar};
     } else {
       $v = eval "\\$pkgvar";                    ## no critic (StringyEval)
     }
@@ -623,10 +650,10 @@ print {$DUMPTRACE_FH} "GOT STALE $sigvar FROM MY PAD\n";
   if ($index_op eq '{') {
     my $sigvar = "\%$varname";
     (my $pkgvar = $sigvar) =~ s/\%/\%$pkg/;
-    if (defined($pad_my->{$sigvar})) {
-      $v = $pad_my->{$sigvar};
-    } elsif (defined($pad_our->{$sigvar})) {
-      $v = $pad_our->{$sigvar};
+    if (defined($PAD_MY->{$sigvar})) {
+      $v = $PAD_MY->{$sigvar};
+    } elsif (defined($PAD_OUR->{$sigvar})) {
+      $v = $PAD_OUR->{$sigvar};
     } else {
       $v = eval "\\$pkgvar";                    ## no critic (StringyEval)
     }
@@ -649,10 +676,10 @@ print {$DUMPTRACE_FH} "GOT STALE $sigvar FROM MY PAD\n";
       $pkgvar = '@DB::args';
     }
 
-    if (defined($pad_my->{$sigvar})) {
-      $v = $pad_my->{$sigvar};
-    } elsif (defined($pad_our->{$sigvar})) {
-      $v = $pad_our->{$sigvar};
+    if (defined($PAD_MY->{$sigvar})) {
+      $v = $PAD_MY->{$sigvar};
+    } elsif (defined($PAD_OUR->{$sigvar})) {
+      $v = $PAD_OUR->{$sigvar};
     } else {
       $v = eval "\\$pkgvar";                    ## no critic (StringyEval)
     }
@@ -664,10 +691,10 @@ print {$DUMPTRACE_FH} "GOT STALE $sigvar FROM MY PAD\n";
   if ($sigil eq '%') {
     my $sigvar = "\%$varname";
     (my $pkgvar = $sigvar) =~ s/\%/\%$pkg/;
-    if (defined($pad_my->{$sigvar})) {
-      $v = $pad_my->{$sigvar};
-    } elsif (defined($pad_our->{$sigvar})) {
-      $v = $pad_our->{$sigvar};
+    if (defined($PAD_MY->{$sigvar})) {
+      $v = $PAD_MY->{$sigvar};
+    } elsif (defined($PAD_OUR->{$sigvar})) {
+      $v = $PAD_OUR->{$sigvar};
     } else {
       $v = eval "\\$pkgvar";                    ## no critic (StringyEval)
     }
@@ -679,14 +706,13 @@ print {$DUMPTRACE_FH} "GOT STALE $sigvar FROM MY PAD\n";
       (my $pkgvar = $sigvar) =~ s/\@/\@$pkg/;
       if ($varname eq '_') {
 	my $depth = $DB_ARGS_DEPTH;
-#	$depth++ while (caller($depth))[CALLER_SUB] =~ /\(eval/;
 	{package DB; () = caller $depth};
 	$pkgvar = '@DB::args';
       }
-      if (defined($pad_my->{$sigvar})) {
-	$v = $pad_my->{$sigvar};
-      } elsif (defined($pad_our->{$sigvar})) {
-	$v = $pad_our->{$sigvar};
+      if (defined($PAD_MY->{$sigvar})) {
+	$v = $PAD_MY->{$sigvar};
+      } elsif (defined($PAD_OUR->{$sigvar})) {
+	$v = $PAD_OUR->{$sigvar};
       } else {
 	$v = eval "\\$pkgvar";                    ## no critic (StringyEval)
       }
@@ -702,10 +728,10 @@ print {$DUMPTRACE_FH} "GOT STALE $sigvar FROM MY PAD\n";
       }
       (my $pkgvar = $sigvar) =~ s/\$/\$$pkg/;
 
-      if (defined($pad_my->{$sigvar})) {
-	$v = ${$pad_my->{$sigvar}};
-      } elsif (defined($pad_our->{$sigvar})) {
-	$v = ${$pad_our->{$sigvar}};
+      if (defined($PAD_MY->{$sigvar})) {
+	$v = ${$PAD_MY->{$sigvar}};
+      } elsif (defined($PAD_OUR->{$sigvar})) {
+	$v = ${$PAD_OUR->{$sigvar}};
       } else {
 	$v = eval "$pkgvar";                      ## no critic (StringyEval)
       }
@@ -723,10 +749,27 @@ sub save_previous_regex_matches {
 	      $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
 	      $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,);
 
-  # XXX - this method has an artificial limitation
-  # if someone needs more than $30, we'll have to figure
-  # something out.
+  # XXX - if someone needs more than $30, submit a feature request
+  # (http://rt.cpan.org/NoAuth/ReportBug.html?Queue=Devel-DumpTrace,
+  # or email to bug-Devel-DumpTrace@rt.cpan.org)
+  # and I'll figure something out ...
+
   return;
+}
+
+END {
+  $_GLOBAL_DESTRUCTION = 1;
+  if ($$ == $pid) {
+    no warnings 'redefine';
+    handle_ALL_deferred_output();
+    separate() if _display_style() > DISPLAY_TERSE;
+    untie $TRACE;
+    $TRACE = 0;
+    *DB::DB = sub { };
+    if ($DUMPTRACE_FH ne *STDERR && $DUMPTRACE_FH ne *STDOUT) {
+      close $DUMPTRACE_FH;
+    }
+  }
 }
 
 ##################################################################
@@ -747,11 +790,6 @@ sub import_all {
   *{$p . '::save_previous_regex_matches'} = *save_previous_regex_matches;
   return;
 }
-
-# use PPI by default, if available? Yeah, OK.
-$Devel::DumpTrace::NO_PPI
-  || $ENV{DUMPTRACE_NOPPI}
-  || eval 'use Devel::DumpTrace::PPI;1';    ## no critic (StringyEval)
 
 ##################################################################
 # Devel::DumpTrace::VerboseLevel: tie class for $Devel::DumpTrace::TRACE.
@@ -810,7 +848,7 @@ Devel::DumpTrace - Evaluate and print out each line before it is executed.
 
 =head1 VERSION
 
-0.09
+0.10
 
 =head1 SYNOPSIS
 
@@ -1062,10 +1100,10 @@ by setting C<$Devel::DumpTrace::DUMPTRACE_FH> to the desired
 I/O handle:
 
     BEGIN {
-        # if Devel::DumpTrace is loaded, direct output to xtrace-output.txt
-        if ($INC{'Devel/DumpTrace.pm'}) {
-            open $Devel::DumpTrace::DUMPTRACE_FH, '>', '/path/xtrace-output.txt';
-        }
+       # if Devel::DumpTrace is loaded, direct output to xtrace-output.txt
+       if ($INC{'Devel/DumpTrace.pm'}) {
+          open $Devel::DumpTrace::DUMPTRACE_FH, '>', '/path/xtrace-output.txt';
+       }
     }
 
 The output stream for the C<Devel::DumpTrace> module can also be controlled
@@ -1153,7 +1191,7 @@ be incorrect or misleading include:
 All statements on a line are evaluated, not just the statement
 currently being executed.
 
-=head3 Statements with chained assignments; complex assignment expressions (*)
+=head3 Statements with chained assignments; complex assignment expressions
 
     ($a,$b) = ('','bar');
     $a = $b = 'foo';
@@ -1167,7 +1205,7 @@ currently being executed.
 Everything to the right of the I<first> assignment operator in a
 statement is evaluated I<before> the statement is executed.
 
-=head3 Multiple lines for one statement (*)
+=head3 Multiple lines for one statement
 
     $a = ($b + $c                # ==> oops, all this module sees is
          + $d + $e);             #     $a = ($b + $c
@@ -1233,7 +1271,7 @@ effort to make your code more friendly for this module.
 =head2 Other bugs or feature requests
 
 Please report any other bugs or feature requests to
-C<bug-devel-xtrace at rt.cpan.org>, or through the web interface at
+C<bug-Devel-DumpTrace at rt.cpan.org>, or through the web interface at
 L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=Devel-DumpTrace>.
 I will be notified, and then you'll automatically be notified of
 progress on your bug as I make changes.
