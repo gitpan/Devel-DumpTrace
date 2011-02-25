@@ -25,7 +25,7 @@ use constant OUTPUT_SUB => 1;
 use constant CALLER_PKG => 0;     # package name
 use constant CALLER_SUB => 3;     # current subroutine name
 
-our $VERSION = '0.10';
+our $VERSION = '0.11';
 our $ARRAY_ELEM_SEPARATOR = ',';
 our $HASH_ENTRY_SEPARATOR = ';';
 our $HASH_PAIR_SEPARATOR = '=>';
@@ -37,6 +37,8 @@ our $DUMPTRACE_FH = *STDERR;
 our $DB_ARGS_DEPTH = 3;
 our %EXCLUDE_PKG = ();
 our %INCLUDE_PKG = ('main' => 1);
+our @EXCLUDE_PATTERN = ('^Devel::DumpTrace', '^Text::Shorten');
+our @INCLUDE_PATTERN = ();
 our (%DEFERRED, $PAD_MY, $PAD_OUR, $TRACE);
 our $_GLOBAL_DESTRUCTION = 0;
 our $_INIT = 0;
@@ -80,72 +82,25 @@ $Devel::DumpTrace::NO_PPI
       }
     }
   }
-
-  _ignore_packages(qr/^Devel::DumpTrace/, qr/^Text::Shorten$/);
-  _recognize_packages('^main$');
 }
 
 sub import {
   my $class = shift;
-  if (@_ > 0) {
-    $TRACE = join ',', @_;
+
+  push @EXCLUDE_PATTERN, map { '^' . substr($_,1) . '$' } grep { /^-/ } @_;
+  push @INCLUDE_PATTERN, map { '^' . substr($_,1) . '$' } grep { /^\+/ } @_;
+  # these packages will be included/excluded at CHECK time, after 
+  # all packages have been loaded 
+
+  my @args = grep { /^[^+-]/ } @_;
+  if (@args > 0) {
+    $TRACE = join ',', @args;
   }
   return;
 }
 
-{
-  # routines for initializing %EXCLUDE_PKG, %INCLUDE_PKG
-
-  my @installed_pkgs = ();
-  my %installed_pkgs = ();
-  my %_seen = ();
-
-  sub _ignore_packages {
-    my (@patterns) = @_;
-    foreach my $pattern (@patterns) {
-      foreach my $pkg (grep { $_ =~ $pattern } _find_installed_pkgs()) {
-	$EXCLUDE_PKG{$pkg}++;
-	delete $INCLUDE_PKG{$pkg};
-      }
-    }
-    return;
-  }
-
-  sub _recognize_packages {
-    my (@patterns) = @_;
-    foreach my $pattern (@patterns) {
-      foreach my $pkg (grep { $_ =~ $pattern } _find_installed_pkgs()) {
-	$INCLUDE_PKG{$pkg}++;
-	delete $EXCLUDE_PKG{$pkg};
-      }
-    }
-    return;
-  }
-
-  # recursively walk the symbol table and add any namespaces found
-  # to %installed_pkgs
-  sub _examine_symbol_table_for_installed_pkgs {
-    my ($nspace, $ref) = shift;
-    return if $_seen{$ref=eval'\%::'.$nspace};
-    $_seen{$ref}++;
-    $installed_pkgs{$nspace}++;
-    for (keys %$ref) {
-      _examine_symbol_table_for_installed_pkgs($nspace.$_) if /::$/;
-    }
-    return;
-  }
-
-  sub _find_installed_pkgs {
-    if (0 == @installed_pkgs) {
-      _examine_symbol_table_for_installed_pkgs('');
-      @installed_pkgs = sort keys %installed_pkgs;
-      s/::$// foreach @installed_pkgs;
-    }
-    return @installed_pkgs;
-  }
-}
-
 sub DB__DB {
+  return if $_GLOBAL_DESTRUCTION;
   return unless $Devel::DumpTrace::TRACE;
 
   my ($p, $f, $l) = caller();
@@ -176,7 +131,19 @@ sub _exclude_pkg {
   my($file,$pkg,$line) = @_;
 
   return 0 if $INCLUDE_PKG{$pkg} || $INCLUDE_PKG{$file};
+  foreach (@INCLUDE_PATTERN) {
+    if ($pkg =~ $_) {
+      $INCLUDE_PKG{$pkg} = 1;
+      return 0;
+    }
+  }
+
   return 1 if $EXCLUDE_PKG{$pkg} || $EXCLUDE_PKG{$file};
+  foreach (@EXCLUDE_PATTERN) {
+    if ($pkg =~ $_) {
+      return $EXCLUDE_PKG{$pkg}=1 if $pkg =~ $_;
+    }
+  }
   return 0 if _package_style() > DISPLAY_NONE;
 
   # exclude files from @_INC when _package_style() is 0
@@ -185,7 +152,7 @@ sub _exclude_pkg {
       return $EXCLUDE_PKG{$file} = $EXCLUDE_PKG{$pkg} = 1;
     }
   }
-  $INCLUDE_PKG{$file} = 1;
+  $INCLUDE_PKG{$pkg} = 1;
   return 0;
 }
 
@@ -848,7 +815,7 @@ Devel::DumpTrace - Evaluate and print out each line before it is executed.
 
 =head1 VERSION
 
-0.10
+0.11
 
 =head1 SYNOPSIS
 
@@ -1143,6 +1110,36 @@ C<%Devel::DumpTrace::INCLUDE_PKG> take precendence over the settings
 of C<%Devel::DumpTrace::EXCLUDE_PKG> (that is, a package that is
 specified in both C<%EXCLUDE_PKG> and C<%INCLUDE_PKG> will
 be I<included>).
+
+=head2 @Devel::DumpTrace::EXCLUDE_PATTERN, @Devel::DumpTrace::INCLUDE_PATTERN
+
+List of regular expressions representing the packages that this
+module will never/always trace through.
+
+Patterns can be from the command line or at module import time by
+passing arguments that begin with C<+> to include packages or
+C<-> to exclude packages:
+
+    # always trace through  Foo::xxx  packages
+    perl -d:DumpTrace=+Foo::.* my_script.pl
+
+    # trace through Foo::Bar but not through Foo::Baz
+    perl -d:DumpTrace=+Foo::Bar,-Bar::Foo my_script.pl
+
+Any pattern from user input will be implicitly anchored (bracketed
+by C<^> and C<$>), so you must explicitly include wildcards
+to match a general pattern of package names.
+
+    # don't trace any package containing /Foo/ except for Xyz::Foo
+    perl -d:DumpTrace=-.*Foo.*,+Xyz::Foo my_script.pl
+
+Settings in C<@INCLUDE_PATTERN> take precendence over C<@EXCLUDE_PATTERN>,
+so a package that matches a pattern in C<@INCLUDE_PATTERN> will always
+be traced, even if it also matches one or more patterns in
+<@EXCLUDE_PATTERN>.
+
+    # -Foo::Bar is ignored, because Foo::Bar also matches included .*::Bar
+    perl -d:DumpTrace=-Foo::Bar,+.*::Bar my_script.pl
 
 =head1 CONFIGURATION AND ENVIRONMENT
 

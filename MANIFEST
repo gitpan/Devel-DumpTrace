@@ -32,6 +32,7 @@ t/81-smoke.t
 t/82-smoke.t
 t/83-smoke.t
 t/86-smoke.t
+t/89-incl-excl-pkgs.t
 t/ppi/00-load.t
 t/ppi/11-dump_scalar.t
 t/ppi/12-array_repr.t
