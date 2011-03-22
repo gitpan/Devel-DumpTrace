@@ -45,9 +45,10 @@ for my $pkg (0,1,2) {
   }
   my $c1 = system($^X, $dmodule, "-Iblib/lib", "-Ilib", "$0.pl");
 
-  my $keep = 0;
+  my $keep = $ENV{KEEP} || 0;
 
   ok($c1 == 0, "ran level $level,$pkg") or $keep++;
+  sleep 10 if $c1!=0;
 
   open XH, '<', $file;
   my @xh = <XH>;
@@ -78,7 +79,7 @@ for my $pkg (0,1,2) {
     $ENV{DUMPTRACE_LEVEL} = "$level,$pkg";
   }
   my $c1 = system($^X, $dmodule, "-Iblib/lib", "-Ilib", "$0.pl");
-  my $keep = 0;
+  my $keep = $ENV{KEEP} || 0;
 
   ok($c1 == 0, "ran level $level") or $keep++;
 

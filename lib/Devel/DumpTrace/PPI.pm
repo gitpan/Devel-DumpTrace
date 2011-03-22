@@ -21,10 +21,11 @@ local $| = 1;
 croak "Devel::DumpTrace::PPI may not be used when \$Devel::DumpTrace::NO_PPI ",
   "is set (Did you load 'Devel::DumpTrace::noPPI'?\n"
   if $Devel::DumpTrace::NO_PPI;
-eval {use PPI;1}
+eval {use PPI;
+       1}
   or croak "PPI not installed. Can't use Devel::DumpTrace::PPI module";
 
-our $VERSION = '0.11';
+$Devel::DumpTrace::PPI::VERSION = '0.12';
 use constant ADD_IMPLICIT_ => 1;
 use constant DECORATE_FOR => 1;
 use constant DECORATE_FOREACH => 1;
@@ -45,6 +46,7 @@ my (%ppi_src, %ppi_doc);
 
 my $last_file_sub_displayed = '';
 my $last_file_line_displayed = '';
+my %IGNORE_FILE_LINE = ();
 
 sub Devel::DumpTrace::PPI::import {
   foreach my $PPI_package (grep { m{^PPI[/.]} } keys %INC) {
@@ -116,8 +118,9 @@ sub get_source_PPI {
       if (ref($element) =~ /^PPI::Statement/) {
 	my ($d1, $d2) = (0,0);
 	my @zrc = _get_source($file, $_line, $element, $d1, $d2);
-	push @{$ppi_src{$file}[$_line]},
-	  bless { (%$element), children => [@zrc] }, ref $element;
+	my $elem = { %$element };
+	$elem->{children} = [ @zrc ];
+	push @{$ppi_src{$file}[$_line]}, bless $elem, ref $element;
       } else {
 	push @{$ppi_src{$file}[$_line]}, $element;
       }
@@ -151,19 +154,7 @@ sub _get_source {
   return @src;
 }
 
-# Overrides &evaluate_and_display_line in Devel/DumpTrace.pm
-sub evaluate_and_display_line_PPI {
-  my ($statements, $pkg, $file, $line, $sub) = @_;
-
-  if (ref $statements ne 'ARRAY') {
-    my $doc = PPI::Document->new(\$statements);
-    $ppi_doc{"$file:$line"} = $doc;
-    $statements = [$doc->elements];
-  }
-
-  my $style = _display_style();
-  my $code;
-  my @s = @{$statements};
+sub _get_decorated_statements {
 
   # Many Perl flow control constructs are optimized to not
   # allow a breakpoint at each iteration of a loop or at each
@@ -172,10 +163,11 @@ sub evaluate_and_display_line_PPI {
   # in a block, we also want to evaluate some other expressions
   # from the parent flow control structure.
 
-  my @ss = @{$statements};
+  my ($statements, $style) = @_;
+  my @s = @{$statements};
   foreach my $ss (grep { $_->{__DECORATED__} } @{$statements}) {
     my $ws = $style == DISPLAY_TERSE ? "\n\t\t\t" : " ";
-  
+
     if ($ss->{__DECORATED__} eq 'foreach'
 	&& $last_file_line_displayed ne $ss->{__FOREACH_LINE__}) {
 
@@ -208,7 +200,22 @@ sub evaluate_and_display_line_PPI {
 	__new_token("}");
     }
   }
+  return @s;
+}
 
+# Overrides &evaluate_and_display_line in Devel/DumpTrace.pm
+sub evaluate_and_display_line_PPI {
+  my ($statements, $pkg, $file, $line, $sub) = @_;
+
+  if (ref $statements ne 'ARRAY') {
+    my $doc = PPI::Document->new(\$statements);
+    $ppi_doc{"$file:$line"} = $doc;
+    $statements = [$doc->elements];
+  }
+
+  my $style = _display_style();
+  my $code;
+  my @s = _get_decorated_statements($statements, $style);
   $code = join '', map { "$_" } @s;
   chomp $code;
   $code .= "\n";
@@ -219,8 +226,10 @@ sub evaluate_and_display_line_PPI {
     separate();
     print {$fh} ">>    ", current_position_string($file,$line,$sub), "\n";
     print {$fh} ">>>   \t\t $code";
-    $last_file_sub_displayed = "$file:$sub";
-    $last_file_line_displayed = "$file:$line";
+    unless ($IGNORE_FILE_LINE{"$file:$line"}) {
+      $last_file_sub_displayed = "$file:$sub";
+      $last_file_line_displayed = "$file:$line";
+    }
   }
 
   my $xcode;
@@ -263,7 +272,8 @@ sub evaluate_and_display_line_PPI {
     if (ref $preval) {
 
       $deferred++;
-      $Devel::DumpTrace::DEFERRED{"$sub : $file"} =
+      $Devel::DumpTrace::DEFERRED{"$sub : $file"} ||= [];
+      push @{$Devel::DumpTrace::DEFERRED{"$sub : $file"}},
 	{ EXPRESSION => [ @preval ],
 	  PACKAGE    => $pkg,
 	  MY_PAD     => $Devel::DumpTrace::PAD_MY,
@@ -282,8 +292,10 @@ sub evaluate_and_display_line_PPI {
       print {$fh} ">>>   ", 
 	current_position_string($file,$line,$sub),
 	"\t$xcode";
-      $last_file_sub_displayed = "$file:$sub";
-      $last_file_line_displayed = "$file:$line";
+      unless ($IGNORE_FILE_LINE{"$file:$line"}) {
+	$last_file_sub_displayed = "$file:$sub";
+	$last_file_line_displayed = "$file:$line";
+      }
     }
   }
   return;
@@ -291,12 +303,12 @@ sub evaluate_and_display_line_PPI {
 
 # any elements that appear AFTER the last assignment operator
 # are evaluated and tokenized.
-# McCabe score for preval: 60   :-(
+# McCabe score for preval: <XXX>60, still 41,</XXX> 28   :-|
 sub preval {
   my ($statement,$style,$pkg) = @_;
   if (ref($statement) =~ /PPI::Token/) {
     if ($statement->{_PREVAL}) {
-      my @e = ($statement);
+      # my @e = ($statement);
       perform_variable_substitution($statement, 0, $style, $pkg)
 	unless $statement->{_DEFER};
       return map { ref($_) eq 'ARRAY' ? @{$_} : $_ } $statement;
@@ -315,122 +327,93 @@ sub preval {
 
   # look for implicit uses of special vars
   if (ADD_IMPLICIT_) {
-
-    #
-    # look for use of implicit @_/@ARGV with shift/pop.
-    #
-    # This cannot be done when the document is initially parsed
-    # (in &__add_implicit_elements, for example) because
-    # we can only definitively determine whether or not we
-    # are inside a subroutine at runtime.
-    #
-    for (my $i=0; $i<@e; $i++) {
-      if (ref($e[$i]) eq 'PPI::Token::Word'
-	  && ($e[$i] eq 'shift' || $e[$i] eq 'pop')) {
-
-	my $j = $i + 1;
-	while ($j <= @e && ref($e[$j]) eq 'PPI::Token::Whitespace') {
-	  $j++;
-	}
-	if ($j >= @e || ref($e[$j]) eq 'PPI::Token::Operator'
-	   || ref($e[$j]) eq 'PPI::Token::Structure') {
-
-	  # found naked pop/shift. Determine if we are inside a sub
-	  # so we know whether to apply @ARGV or @_.
-	  my $n = 0;
-	  my $xp = 0;
-	  while (my @p = caller($n++)) {
-	    $xp += $p[CALLER_PKG] !~ /^Devel::DumpTrace/ &&
-	           $p[CALLER_SUB] !~ /^\(eval/;
-	  }
-	  if ($xp >= 2) { # inside sub, manip @_
-	    splice @e, $i+1, 0,
-	      bless({content=>' '}, 'PPI::Token::Whitespace'),
-	      bless({content=>'@_'}, 'PPI::Token::Magic');
-	  } else {        # not inside sub, manip @ARGV
-	    splice @e, $i+1, 0,
-	      bless({content=>' '}, 'PPI::Token::Whitespace'),
-	      bless({content=>'@ARGV'}, 'PPI::Token::Symbol');
-	  }
-	}
-      }
-    }
-
-    # TODO -  ; split /pattern/, $var   means   @_ = split /pattern/, $var
-    # This one is tricky. @_ is used in both void and *scalar* context, so
-    #
-    #   split  construction                  implicit @_ load?
-    #       split /pattern/, var                 YES
-    #       @z = split /pattern/, var            NO
-    #       $z = split /pattern/, var            YES
-    #       $z += split /pattern/, var           YES
-    #       push @z, split /pattern/;            NO
-    #       (split /pattern/) {...}              NO
-    #       $z = [ split /pattern/ ]             NO
-    #       $z = { split /pattern/ }             NO
-    #       $z = do { split /pattern/ }          YES
-    #       \& { split /pattern/ }               YES
-    #       sub { split /pattern/ }              YES
+    __append_implicit_to_naked_shift_pop(\@e);
   }
 
   # find last assignment operator in this expression, if any.
   my $lao_index = 0;
   for my $i (0 .. $#e) {
-    if (ref $e[$i] eq 'PPI::Token::Operator') {
-      if ($e[$i]->is_assignment_operator) {
-	$lao_index = $i;
-      } elsif (ref $e[$i] eq 'PPI::Token::Regexp::Substitute') {
-	if (0) {
-	  # Should eval for  $var =~ s/abc/def/   also be deferred?
-	  # No. Usually, $var (or $1,$2,...) will be seen shortly after
-	  # such an expression. TODO - make this configurable.
-	  $lao_index = $i;
-	}
-      }
+    if (ref($e[$i]) eq 'PPI::Token::Operator'
+	&& $e[$i]->is_assignment_operator) {
+      $lao_index = $i;
     }
   }
+  _preval_render(\@e, $lao_index, $style, $pkg);
+  my @output = map { ref($_) eq 'ARRAY' ? @{$_} : $_ } @e;
+  $Devel::DumpTrace::DB_ARGS_DEPTH--;
+  return @output;
+}
+
+sub _preval_render {
 
   # evaluate any PPI::Token::Symbol elements after element $z
   # tokenize other PPI::Token::* elements
   # pass other elements back to &preval recursively
-  for my $i ($lao_index .. $#e) {
-    if (ref $e[$i] eq 'PPI::Token::Symbol') {
-      next if $e[$i]->{_DEFER};
-      perform_variable_substitution(@e, $i, $style, $pkg);
-      if ($i > 0 && ref($e[$i-1]) eq 'PPI::Token::Cast') {
-	if ($e[$i-1] eq '@' && $e[$i] =~ /^\[(.*)\]$/) {
+
+  my ($e, $lao_index, $style, $pkg) = @_;
+  $Devel::DumpTrace::DB_ARGS_DEPTH++;
+  for (my $i=$lao_index; $i < @$e; $i++) {
+    if (ref($e->[$i]) eq 'PPI::Token::Symbol') {
+      next if $e->[$i]{_DEFER};
+      perform_variable_substitution(@$e, $i, $style, $pkg);
+      if ($i > 0 && ref($e->[$i-1]) eq 'PPI::Token::Cast') {
+	if ($e->[$i-1] eq '@' && $e->[$i] =~ /^\[(.*)\]$/) {
 
 	  # @$a => @[1,2,3]   should render as   @$a => (1,2,3)
 
-	  $e[$i-1] = '';
-	  $e[$i] = '(' . substr($e[$i],1,-1) . ')';
-	} elsif ($e[$i-1] eq '%' && $e[$i] =~ /^\{(.*)\}$/) {
+	  $e->[$i-1] = '';
+	  $e->[$i] = '(' . substr($e->[$i],1,-1) . ')';
+	} elsif ($e->[$i-1] eq '%' && $e->[$i] =~ /^\{(.*)\}$/) {
 
 	  # render  %$a  as  ('a'=>1;'b'=>2) , not  %{'a'=>1;'b'=>2}
 
-	  $e[$i-1] = '';
-	  $e[$i] = '(' . substr($e[$i],1,-1) . ')';
+	  $e->[$i-1] = '';
+	  $e->[$i] = '(' . substr($e->[$i],1,-1) . ')';
 	}
       }
-    } elsif (ref $e[$i] eq 'PPI::Token::Magic') {
-      next if $e[$i]->{_DEFER};
-      perform_variable_substitution(@e, $i, $style, '<magic>');
-    } elsif (ref($e[$i]) =~ /PPI::Token/) {
-      $e[$i] = "$e[$i]" if ref($e[$i]) ne 'PPI::Token::Cast';
+    } elsif (ref $e->[$i] eq 'PPI::Token::Magic') {
+      next if $e->[$i]{_DEFER};
+      perform_variable_substitution(@$e, $i, $style, '<magic>');
+    } elsif (ref($e->[$i]) =~ /PPI::Token/) {
+      $e->[$i] = "" . $e->[$i] if ref($e->[$i]) ne 'PPI::Token::Cast';
     } else {
-      $e[$i] = [ preval($e[$i],$style,$pkg) ];
+      $e->[$i] = [ preval($e->[$i],$style,$pkg) ];
     }
   }
-  my @output = map { ref($_) eq 'ARRAY' ? @{$_} : $_ } @e;
   $Devel::DumpTrace::DB_ARGS_DEPTH--;
-  return @output;
+  return;
+}
+
+sub perform_variable_substitution_on_tokens {
+  # needed to evaluate complex lvalues
+  my ($elem, $style, $dpkg) = @_;
+  my @out = ();
+  my $ref = ref($elem);
+  if ($ref =~ /^PPI::Statement/ || $ref =~ /^PPI::Structure/) {
+    foreach my $e ($elem->elements()) {
+      $Devel::DumpTrace::DB_ARGS_DEPTH++;
+      push @out, perform_variable_substitution_on_tokens($e, $style, $dpkg);
+      $Devel::DumpTrace::DB_ARGS_DEPTH--;
+    }
+  } elsif ($ref eq 'PPI::Token::Symbol') {
+    my @e = ($elem);
+    perform_variable_substitution(@e, 0, $style, $dpkg);
+    @out = "$e[0]";
+  } elsif ($ref eq 'PPI::Token::Magic') {
+    my @e = ($elem);
+    perform_variable_substitution(@e, 0, $style, '<magic>');
+    @out = "$e[0]";
+  } else {
+    @out = "$elem";
+  }
+  return join '', @out;
 }
 
 # Overrides &handle_deferred_output in Devel/DumpTrace.pm
 sub handle_deferred_output_PPI {
 
   my ($sub, $file) = @_;
-  my $deferred = delete $Devel::DumpTrace::DEFERRED{"$sub : $file"};
+  my $deferred = pop @{$Devel::DumpTrace::DEFERRED{"$sub : $file"}};
   return unless defined($deferred);
 
   my $fh = $Devel::DumpTrace::DUMPTRACE_FH;
@@ -447,8 +430,12 @@ sub handle_deferred_output_PPI {
       perform_variable_substitution(@e, $i, $style, $deferred_pkg);
     } elsif (ref $e[$i] eq 'PPI::Token::Magic') {
       perform_variable_substitution(@e, $i, $style, '<magic>');
-    } elsif (ref $e[$i]) {
-      $e[$i] = join '', $e[$i]->tokens();
+    } elsif (ref $e[$i] eq 'PPI::Token::Cast') {
+      eval { $e[$i] = "$e[$i]"; };
+    } elsif (ref($e[$i]) =~ /^PPI::/) {
+      $Devel::DumpTrace::DB_ARGS_DEPTH++;
+      $e[$i] = perform_variable_substitution_on_tokens($e[$i],$style,$deferred_pkg);
+      $Devel::DumpTrace::DB_ARGS_DEPTH--;
     }
   }
   my $deferred_output = join '', @e;
@@ -476,8 +463,10 @@ sub handle_deferred_output_PPI {
   } else {
     print {$fh} ">>>>>\t\t $deferred_output";
   }
-  $last_file_sub_displayed = "$file:$sub";
-  $last_file_line_displayed = "$file:$line";
+  unless ($IGNORE_FILE_LINE{"$file:$line"}) {
+    $last_file_sub_displayed = "$file:$sub";
+    $last_file_line_displayed = "$file:$line";
+  }
   return;
 }
 
@@ -620,10 +609,17 @@ sub __append_implicit_to_naked_builtins {
   #
   # func;    means   func($_);
   #
+  #
+  # 0.12: but       $hash{bareword} 
+  # should not be   $hash{bareword $_}
+  #
   for (my $i=0; $i<@$e; $i++) {
     if (ref($e->[$i]) eq 'PPI::Token::Word' 
 	&& defined $implicit_{"$e->[$i]"}) {
       my $j = $i + 1;
+      my $gparent = $e->[$i]->parent && $e->[$i]->parent->parent;
+      next if $gparent && ref($gparent) eq 'PPI::Structure::Subscript'
+	&& $gparent =~ /^{/;
       $j++ while $j <= @$e && ref($e->[$j]) eq 'PPI::Token::Whitespace';
       if ($j >= @$e || ref($e->[$j]) eq 'PPI::Token::Structure') {
 	if ($e->[$i] eq 'split') {
@@ -667,6 +663,49 @@ sub __insert_implicit_into_default_foreach {
     }
   }
   return;
+}
+
+sub __append_implicit_to_naked_shift_pop {
+  #
+  # look for use of implicit @_/@ARGV with shift/pop.
+  #
+  # This cannot be done when the document is initially parsed
+  # (in &__add_implicit_elements, for example) because
+  # we can only definitively determine whether or not we
+  # are inside a subroutine at runtime.
+  #
+  my $e = shift;
+  for (my $i=0; $i<@$e; $i++) {
+    next if ref($e->[$i]) ne 'PPI::Token::Word';
+    next if $e->[$i] ne 'shift' && $e->[$i] ne 'pop';
+
+    my $j = $i + 1;
+    while ($j <= @$e && ref($e->[$j]) eq 'PPI::Token::Whitespace') {
+      $j++;
+    }
+    if ($j >= @$e || ref($e->[$j]) eq 'PPI::Token::Operator'
+	|| ref($e->[$j]) eq 'PPI::Token::Structure') {
+
+      # found naked pop/shift. Determine if we are inside a sub
+      # so we know whether to apply @ARGV or @_.
+      my $n = 0;
+      my $xp = 0;
+      while (my @p = caller($n++)) {
+	$xp += $p[CALLER_PKG] !~ /^Devel::DumpTrace/ &&
+	       $p[CALLER_SUB] !~ /^\(eval/;
+      }
+
+      if ($xp >= 2) { # inside sub, manip @_
+	splice @$e, $i+1, 0,
+	  bless({content=>' '}, 'PPI::Token::Whitespace'),
+	  bless({content=>'@_'}, 'PPI::Token::Magic');
+      } else {        # not inside sub, manip @ARGV
+	splice @$e, $i+1, 0,
+	  bless({content=>' '}, 'PPI::Token::Whitespace'),
+	  bless({content=>'@ARGV'}, 'PPI::Token::Symbol');
+      }
+    }
+  }
 }
 
 # A C-style for-loop has the structure:
@@ -738,8 +777,10 @@ sub __decorate_first_statement_in_for_block {
 	$element->{__CONTINUE__} = __new_null_statement()->clone();
       }
 
-      my $line = $for->line_number; 
-      $element->{__FOR_LINE__} = "$file:$line"; 
+      my $line = $for->line_number;
+      my $line2 = ($gparent->tokens)[-1]->line_number;
+      $element->{__FOR_LINE__} = "$file:$line";
+      $IGNORE_FILE_LINE{"$file:$line2"} = 1;
       $element->{__DECORATED__} = 'for';
     }
   }
@@ -993,7 +1034,7 @@ Devel::DumpTrace::PPI - PPI-based version of Devel::DumpTrace
 
 =head1 VERSION
 
-0.11
+0.12
 
 =head1 SYNOPSIS
 
@@ -1531,6 +1572,10 @@ for abbreviating long output, when desired.
 None known.
 
 =head1 BUGS AND LIMITATIONS
+
+The PPI-based parser in this module runs 3-6 times slower than the
+basic parser (which runs 7-9 times slower than the basic
+L<Devel::Trace|Devel::Trace>).
 
 See L<Devel::DumpTrace/"SUPPORT"> for other support information.
 Report issues for this module with the C<Devel-DumpTrace> distribution.

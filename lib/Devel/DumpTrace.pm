@@ -6,10 +6,32 @@ use Scalar::Util;
 use Text::Shorten;
 use Devel::DumpTrace::CachedDisplayedArray;
 use Devel::DumpTrace::CachedDisplayedHash;
+use IO::Handle;
 use Carp;
 use strict;
 use warnings;
 # $| = 1;
+
+eval 'use Time::HiRes qw(time)';    ## no critic (StringyEval)
+
+
+BEGIN {
+  if (defined $ENV{DUMPTRACE}) {
+    my @kv;
+    if ($ENV{DUMPTRACE} =~ /;/) {
+      @kv = split /;/, $ENV{DUMPTRACE};
+    } else {
+      @kv = split /,/, $ENV{DUMPTRACE};
+    }
+    foreach my $kv (@kv) {
+      my ($k,$v) = split /=/, $kv, 2;
+      $ENV{"DUMPTRACE_$k"} = $v;
+    }
+  }
+
+  # open a handle to the console, for debugging
+  open *Devel::DumpTrace::TTY, '>>', $^O eq 'MSWin32' ? 'CON' : '/dev/tty';
+}
 
 use constant DISPLAY_NONE  => 0;  # trace off
 use constant DISPLAY_TERSE => 1;  # concise - 1 trace line per stmnt
@@ -19,13 +41,15 @@ use constant ABBREV_MILD   => 1;  # mild abbreviation      arrays, hashes
 use constant ABBREV_NONE   => 2;  # no abbreviation
 
 # include subroutine name in trace output?
-use constant OUTPUT_SUB => 1;
+use constant OUTPUT_SUB => !($ENV{DUMPTRACE_NO_SUB} || 0) || 0;
+use constant OUTPUT_PID => $ENV{DUMPTRACE_PID} || 0;
+use constant OUTPUT_TIME => $ENV{DUMPTRACE_TIME} || 0;
 
 # for interpreting list output of  caller
 use constant CALLER_PKG => 0;     # package name
 use constant CALLER_SUB => 3;     # current subroutine name
 
-our $VERSION = '0.11';
+our $VERSION = '0.12';
 our $ARRAY_ELEM_SEPARATOR = ',';
 our $HASH_ENTRY_SEPARATOR = ';';
 our $HASH_PAIR_SEPARATOR = '=>';
@@ -33,7 +57,7 @@ our $XEVAL_SEPARATOR = ':';
 our $SEPARATOR = "-------------------------------------------\n";
 
 my $pid = $$;
-our $DUMPTRACE_FH = *STDERR;
+our $DUMPTRACE_FH;
 our $DB_ARGS_DEPTH = 3;
 our %EXCLUDE_PKG = ();
 our %INCLUDE_PKG = ('main' => 1);
@@ -74,33 +98,51 @@ $Devel::DumpTrace::NO_PPI
   if (defined $ENV{DUMPTRACE_FH}) {
     if (uc $ENV{DUMPTRACE_FH} eq 'STDOUT') {
       $DUMPTRACE_FH = *STDOUT;
+    } elsif (uc $ENV{DUMPTRACE_FH} eq 'TTY') {
+      my $tty = $^O eq 'MSWin32' ? 'CON' : '/dev/tty';
+      unless (open $DUMPTRACE_FH, '>>', $tty) {
+	warn "Failed to open tty as requsted by ",
+	  "DUMPTRACE_FH=$ENV{DUMPTRACE_FH}. Failover to STDERR\n";
+	$DUMPTRACE_FH = *STDERR;
+      }
+      $DUMPTRACE_FH->autoflush(1);
     } else {
       ## no critic (BriefOpen)
       unless (open $DUMPTRACE_FH, '>', $ENV{DUMPTRACE_FH}) {
 	die "Can't use $ENV{DUMPTRACE_FH} as trace output file: $!\n",
 	  "Devel::DumpTrace module is quitting.\n";
       }
+      $DUMPTRACE_FH->autoflush(1);
     }
+  } else {
+    $DUMPTRACE_FH = *STDERR;
   }
 }
 
 sub import {
-  my $class = shift;
+  my ($class, @args) = @_;
 
-  push @EXCLUDE_PATTERN, map { '^' . substr($_,1) . '$' } grep { /^-/ } @_;
-  push @INCLUDE_PATTERN, map { '^' . substr($_,1) . '$' } grep { /^\+/ } @_;
+  push @EXCLUDE_PATTERN, map { '^' . substr($_,1) . '$' } grep { /^-/ } @args;
+  push @INCLUDE_PATTERN, map { '^' . substr($_,1) . '$' } grep { /^\+/ } @args;
   # these packages will be included/excluded at CHECK time, after 
   # all packages have been loaded 
 
-  my @args = grep { /^[^+-]/ } @_;
+  push @EXCLUDE_PATTERN, 
+    map { '^' . $_ . '$' } split /,/, $ENV{DUMPTRACE_EXCLPKG} || '';
+  push @INCLUDE_PATTERN, 
+    map { '^' . $_ . '$' } split /,/, $ENV{DUMPTRACE_INCLPKG} || '';
+
+  @args = grep { /^[^+-]/ } @args;
   if (@args > 0) {
     $TRACE = join ',', @args;
   }
   return;
 }
 
+our $ZZ = 0;
+
 sub DB__DB {
-  return if $_GLOBAL_DESTRUCTION;
+  return if $_GLOBAL_DESTRUCTION ; # && !$DB::single;
   return unless $Devel::DumpTrace::TRACE;
 
   my ($p, $f, $l) = caller();
@@ -108,10 +150,12 @@ sub DB__DB {
   $sub ||= '__top__';
   $sub =~ s/::$/::__top__/;
 
-  return if _exclude_pkg($f,$p,$l);
-  return if _display_style() == DISPLAY_NONE;
-  handle_deferred_output($sub, $f);
+  if ($DB::single < 2) {
+    return if _exclude_pkg($f,$p,$l);
+    return if _display_style() == DISPLAY_NONE;
+  }
 
+  handle_deferred_output($sub, $f);
   my $code = get_source($f,$l);
 
   save_pads(1);
@@ -120,15 +164,37 @@ sub DB__DB {
   return;
 }
 
+
+my %sources = ();
 sub get_source {
   my ($file, $line) = @_;
   no strict 'refs';                    ## no critic (NoStrict)
-  my $source = \@{"::_<$file"};
-  return $source->[$line];
+
+  if (!defined $sources{$file}) {
+    # die "source not available for $file ...\n";
+    my $source_key = "::_<" . $file;
+    eval {
+      $sources{$file} = [ @{$source_key} ]
+    };
+    if ($@) {
+      # this happens when we are poking around the symbol table?
+      # are we corrupting the source file data somehow?
+
+      $sources{$file} = [ ("SOURCE NOT AVAILABLE FOR file $file: $@") x 999 ];
+      if (open my $grrrrr, '<', $file) {
+	$sources{$file} = [ "", <$grrrrr> ];
+	warn "Source for \"$file\" not loaded automatically at debugger level ...\n";
+	close $grrrrr;
+      }
+    }
+  }
+  return $sources{$file}->[$line];
 }
 
 sub _exclude_pkg {
   my($file,$pkg,$line) = @_;
+
+  local *STDERR = *Devel::DumpTrace::TTY;
 
   return 0 if $INCLUDE_PKG{$pkg} || $INCLUDE_PKG{$file};
   foreach (@INCLUDE_PATTERN) {
@@ -153,6 +219,7 @@ sub _exclude_pkg {
     }
   }
   $INCLUDE_PKG{$pkg} = 1;
+
   return 0;
 }
 
@@ -197,9 +264,20 @@ sub save_pads {
 	current_depth(), " $target_depth $n at ";
     return;
   }
+  if ($n < 0) {
+    Carp::cluck "save_pads: request for shallow frame ",
+	current_depth(), " $target_depth $n at ";
+    return;
+  }
 
-  $PAD_MY = PadWalker::peek_my($n + 1);
-  $PAD_OUR = PadWalker::peek_our($n + 1);
+  eval {
+    $PAD_MY = PadWalker::peek_my($n + 1);
+    $PAD_OUR = PadWalker::peek_our($n + 1);
+    1;
+  } or do {
+    Carp::confess("$@ from PadWalker: \$n=$n is too large.\n",
+		  "Target depth was $target_depth\n");
+  };
 
   # add extra data to the pads so that they can be refreshed
   # at an arbitrary point in the future
@@ -233,18 +311,21 @@ sub evaluate_and_display_line {
   }
 
   # look for assignment operator.
+  $DEFERRED{"$sub : $f"} ||= [];
+  #$code .= '';
   if ($code    =~ m{[-+*/&|^.%]?=[^=>]} 
       || $code =~ m{[\b*&|/<>]{2}=\b}   ) {
 
     my ($expr1, $op, $expr2) = ($`, $&, $');
+
     if ($style < DISPLAY_GABBY) {
       $expr2 = perform_extended_variable_substitutions($op . $expr2, $p);
     } else {
       $expr2 = perform_variable_substitutions($op . $expr2, $p);
     }
 
-    $DEFERRED{"$sub : $f"}
-      = { PACKAGE => $p,
+    push @{$DEFERRED{"$sub : $f"}},
+      { PACKAGE => $p,
 	  MY_PAD  => $PAD_MY,
 	  OUR_PAD => $PAD_OUR,
 	  SUB     => $sub,
@@ -260,6 +341,8 @@ sub evaluate_and_display_line {
       }
     }
     return;
+  } else {
+    push @{$DEFERRED{"$sub : $f"}}, undef;
   }
 
   my $xcode;
@@ -283,7 +366,8 @@ sub evaluate_and_display_line {
     $xcode = perform_variable_substitutions($code, $p);
 
   }
-
+  # $xcode .= '';
+  
   if ($style >= DISPLAY_GABBY) {
     if ($xcode ne $code) {
       print {$DUMPTRACE_FH} ">>>> \t\t $xcode";     # [pre eval]
@@ -403,6 +487,12 @@ sub hash_repr {
   # see if we can avoid some expensive calls
   # to  Text::Shorten::shorten_hash .
 
+  if ((Scalar::Util::reftype($hashref)||'') ne 'HASH') {
+    # this can happen with globs, e.g.,  $$glob->{attribute} = value;
+    return "$hashref";
+  }
+
+
   if (tied(%{$hashref})
       && ref(tied %{$hashref}) eq 'Devel::DumpTrace::CachedDisplayedHash') {
 
@@ -412,7 +502,10 @@ sub hash_repr {
 	map { join $HASH_PAIR_SEPARATOR, @{$_} } @{$result};
     }
     $hash = (tied %{$hashref})->{PHASH};
-  } elsif (!tied(%{$hashref}) && 100 < scalar keys %{$hashref}) {
+  } elsif (!tied(%{$hashref}) 
+	   && !__hashref_is_symbol_table($hashref) 
+	   && 100 < scalar keys %{$hashref}) {
+
     tie %{$hashref}, 'Devel::DumpTrace::CachedDisplayedHash', %{$hashref};
     $hash = (tied %{$hashref})->{PHASH};
   } else {
@@ -440,6 +533,19 @@ sub hash_repr {
     map { join $HASH_PAIR_SEPARATOR, @{$_} } @r;
 }
 
+sub __hashref_is_symbol_table {
+  # if we pass a reference to a symbol table in repr_hash,
+  # we don't want to tie it to a D::DT::CachedDisplayedHash.
+  #
+  # Don't know if this is the best method or if it is
+  # perfectly reliable, but it is getting there ...
+
+  use B;
+  my ($hashref) = @_;
+  my $sv = B::svref_2object($hashref);
+  return ref($sv) eq 'B::HV' && $sv->NAME;
+}
+
 sub array_repr {
   my $arrayref = shift;
 
@@ -465,8 +571,14 @@ sub array_repr {
     }
     $array = (tied @{$arrayref})->{PARRAY};
   } elsif (!tied(@{$arrayref}) && 100 < scalar @{$arrayref}) {
-    tie @{$arrayref}, 'Devel::DumpTrace::CachedDisplayedArray', @{$arrayref};
-    $array = (tied @{$arrayref})->{PARRAY};
+    use Devel::DumpTrace::CachedDisplayedArray;
+
+    eval {
+      tie @{$arrayref}, 'Devel::DumpTrace::CachedDisplayedArray', @{$arrayref};
+      $array = (tied @{$arrayref})->{PARRAY};
+    } or do {
+      $array = [ map { dump_scalar($_) } @{$arrayref} ];
+    };
   } else {
     $array = [ map { dump_scalar($_) } @{$arrayref} ];
   }
@@ -494,7 +606,8 @@ sub handle_ALL_deferred_output {
 
 sub handle_deferred_output {
   my ($sub, $file) = @_;
-  my $deferred = delete $DEFERRED{"$sub : $file"};
+  my $deferred = pop @{$DEFERRED{"$sub : $file"}};
+
   if (defined $deferred) {
 
     my ($expr1, $expr2) = @{$deferred->{EXPRESSION}};
@@ -537,13 +650,23 @@ sub perform_variable_substitutions {
 
 sub current_position_string {
   my ($file, $line, $sub) = @_;
+  if (OUTPUT_TIME) {
+    $file = sprintf "%.3f:%s", time-$^T, $file;
+  }
   if (OUTPUT_SUB) {
     $sub ||= '__top__';
     # $file already probably contains package information.
     # Keeping it in $sub is _usually_ redundant and makes the
     # line too long.
     $sub =~ s/.*:://;
-    return "$file:$line:[$sub]:";
+
+    if (OUTPUT_PID) {
+      return "$$:$file:$line:[$sub]:";
+    } else {
+      return "$file:$line:[$sub]:";
+    }
+  } elsif (OUTPUT_PID) {
+    return "$$:$file:$line:";
   } else {
     return "$file:$line:";
   }
@@ -551,19 +674,38 @@ sub current_position_string {
 
 sub perform_extended_variable_substitutions {
   my ($xcode, $pkg) = @_;
-  $xcode =~ s{  ([\$\@\%])\s*                   # sigil
-                ([\w:]+)                        # var name, nay include pkg
-                (\s*->)?                        # optional dereference op
-                (\s*[\[\{])?                    # optional subscript
+  $xcode =~ s{  ([\$\@\%])\s*    # sigil
+                ([\w:]*\w)(?!:)  # var name, may incl. pkg, ends in alphanum
+                (\s*->)?         # optional dereference op
+                (\s*[\[\{])?     # optional subscript
              }{ $1 . $2 . $XEVAL_SEPARATOR
                . evaluate($1,$2,$3||'',$4||'',$pkg)
              }gex;
   return $xcode;
 }
 
-# McCabe score: 48
+sub get_DB_args {
+  my $depth = 1 + shift;
+  my @z;
+  for (my $i=$depth; $i<=$depth; $i++) {
+    if ($i>=0) {
+      package DB; 
+      my @y = caller($depth); 
+      return if @y==0;
+    }
+
+    # best efforts here. Sometimes this assignment gives a
+    # "Bizarre copy of ARRAY in aassign" error message
+    # (when $depth is too deep and @DB::args is not defined?).
+    eval 'no warnings q/internal/; @z = @DB::args';
+  }
+  return @z;
+}
+
+# McCabe score: 49
 sub evaluate {
   my ($sigil, $varname, $deref_op, $index_op, $pkg) = @_;
+# return unless defined($sigil) && $sigil ne '';
   my $v;
 
   no strict 'refs';                    ## no critic (NoStrict)
@@ -639,16 +781,20 @@ sub evaluate {
       while ((caller $depth)[CALLER_SUB] =~ /^\(eval/) {
 	$depth++;
       }
-      { package DB; () = caller $depth }
-      $pkgvar = '@DB::args';
-    }
-
-    if (defined($PAD_MY->{$sigvar})) {
+      $v = [ get_DB_args($depth) ];
+    } elsif (defined($PAD_MY->{$sigvar})) {
       $v = $PAD_MY->{$sigvar};
     } elsif (defined($PAD_OUR->{$sigvar})) {
       $v = $PAD_OUR->{$sigvar};
     } else {
-      $v = eval "\\$pkgvar";                    ## no critic (StringyEval)
+      eval {
+	$v = eval "\\" . $pkgvar;                 ## no critic (StringyEval)
+      };
+      if (!defined $v) {
+	print {$DUMPTRACE_FH} "Devel::DumpTrace: ", 
+	  "Couldn't find $sigvar/$pkgvar in any appropriate scope.\n";
+	$v = [];
+      }
     }
     if ($index_op eq '[') {
       return '(' . array_repr($v) . ')[';
@@ -673,15 +819,18 @@ sub evaluate {
       (my $pkgvar = $sigvar) =~ s/\@/\@$pkg/;
       if ($varname eq '_') {
 	my $depth = $DB_ARGS_DEPTH;
-	{package DB; () = caller $depth};
-	$pkgvar = '@DB::args';
-      }
-      if (defined($PAD_MY->{$sigvar})) {
+        $v = [ get_DB_args($depth) ];
+      } elsif (defined($PAD_MY->{$sigvar})) {
 	$v = $PAD_MY->{$sigvar};
       } elsif (defined($PAD_OUR->{$sigvar})) {
 	$v = $PAD_OUR->{$sigvar};
       } else {
-	$v = eval "\\$pkgvar";                    ## no critic (StringyEval)
+	eval { $v = eval "\\$pkgvar" };        ## no critic (StringyEval)
+        if (!defined $v) {
+	  print {$DUMPTRACE_FH} "Devel::DumpTrace: ",
+	    "Couldn't find $sigvar/$pkgvar in any appropriate scope.\n";
+	  $v = [];
+        }
       }
       return '(' . array_repr($v) . ')[';
     } elsif ($varname =~ /^\d+$/) {
@@ -689,6 +838,7 @@ sub evaluate {
       $v = $matches[$varname];
       return dump_scalar($v);
     } else {
+
       my $sigvar = "\$$varname";
       if ($varname eq '_') {
 	$pkg = 'main::';
@@ -815,7 +965,7 @@ Devel::DumpTrace - Evaluate and print out each line before it is executed.
 
 =head1 VERSION
 
-0.11
+0.12
 
 =head1 SYNOPSIS
 
@@ -914,7 +1064,8 @@ None of interest.
 Controls whether and how much output is produced by this module.
 Setting C<$Devel::DumpTrace::TRACE> to zero will disable the module.
 Since this module can produce a lot of output and has other overhead
-that can considerably slow down your program, you may find it
+that can considerably slow down your program
+(by a factor of 50 or more), you may find it
 useful to toggle this variable for critical sections of your code
 rather than leave it set for the entire program. For example:
 
@@ -1153,6 +1304,31 @@ version.
 B<< This is an incompatible change from v0.06, which recognized 
 the vars C<XTRACE_FH> and C<XTRACE_LEVEL>. >>
 
+If the C<DUMPTRACE_PID> environment variable is set to a true value,
+this module will include process ID information with the file and line
+number in all trace output. This setting can be helpful in debugging
+multi-process programs (programs that C<fork>).
+
+If the C<DUMPTRACE_TIME> environment variable is set to a true value,
+this module will include program runtime information with the file
+and line number in all trace output. Depending on the evaluation needs
+of each line of the code, the timestamp associated with a line may
+be created either immediately before or immediately after the line
+is executed.
+C<DUMPTRACE_TIME> and C<DUMPTRACE_PID> may both be used at the same time.
+
+When more than one environment variable needs to be set, the caller
+can use the C<DUMPTRACE> environment variable to set multiple variables
+concisely. If C<$ENV{DUMPTRACE}> is set, this module will split
+the variable value into key value pairs and update the other relevant
+environment variables. That is,
+
+    DUMPTRACE=PID=1,FH=trace.out,EXCLPKG=My::Module
+
+is equivalent to the longer
+
+    DUMPTRACE_PID=1 DUMPTRACE_FH=trace.out DUMPTRACE_EXCL=My::Module
+
 =head1 INCOMPATIBILITIES
 
 None known.
@@ -1335,3 +1511,4 @@ by the Free Software Foundation; or the Artistic License.
 See http://dev.perl.org/licenses/ for more information.
 
 =cut
+

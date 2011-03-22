@@ -24,10 +24,10 @@ WriteMakefile(
     AUTHOR              => q{Marty O'Brien <mob@cpan.org>},
     VERSION_FROM        => 'lib/Devel/DumpTrace.pm',
     ABSTRACT_FROM       => 'lib/Devel/DumpTrace.pm',
-    ($ExtUtils::MakeMaker::VERSION+0 >= 6.3002
+    (eval $ExtUtils::MakeMaker::VERSION >= 6.3002
       ? ('LICENSE'=> 'perl')
       : ()),
-    ($ExtUtils::MakeMaker::VERSION+0 >= 6.46
+    (eval $ExtUtils::MakeMaker::VERSION >= 6.46
       ? ('META_MERGE'   => { no_index => $NO_INDEX })
       : ()),
     PL_FILES            => {},
