@@ -8,7 +8,7 @@ our @ISA = qw(Exporter);
 our @EXPORT = qw();
 our @EXPORT_OK = qw(shorten_scalar shorten_array shorten_hash);
 our %EXPORT_TAGS = (all => [ @EXPORT_OK ]);
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 our $DOTDOTDOT = '...';
 our $DOTDOTDOT_LENGTH = length($DOTDOTDOT);
@@ -283,7 +283,7 @@ sub shorten_hash {
 	  || $a cmp $b
 	} keys %$hash;
     } else {
-      my @hashkeys = @key = grep { defined $key{$_} } @key;
+      @hashkeys = @key = grep { defined $key{$_} } @key;
       push @hashkeys, grep { !defined $key{$_} } keys %$hash;
     }
   } else {
@@ -316,7 +316,7 @@ Text::Shorten - Abbreviate long output
 
 =head1 VERSION
 
-0.03
+0.04
 
 =head1 SYNOPSIS
 
@@ -452,19 +452,4 @@ by the Free Software Foundation; or the Artistic License.
 See http://dev.perl.org/licenses/ for more information.
 
 =cut
-
-
-
-TODOs:
-----
-If we're going to make this module really efficient for large
-arrays and hashes, we need caching.
-That could mean tie'ing arrays and hashes to behavior
-that caches the short output (for given maximum lengths
-and separators), but clears the cache when the elements
-change.
-
-... actually the caching should go at the Devel-DumpTrace
-level since that module makes modifications to every hash
-and array that it touches .....
 

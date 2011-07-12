@@ -16,8 +16,10 @@ to make use of it.
 # no index instructions for PAUSE
 my $NO_INDEX = 
   { 'package' =>
-    ['Text::Shorten', 'Devel::DumpTrace::CachedDisplayedArray',
-     'Devel::DumpTrace::CachedDisplayedHash', 'Devel::DumpTrace::noPPI'] };
+    ['Text::Shorten', 
+     'Devel::DumpTrace::CachedDisplayedArray',
+     'Devel::DumpTrace::CachedDisplayedHash', 
+     'Devel::DumpTrace::noPPI'] };
 
 WriteMakefile(
     NAME                => 'Devel::DumpTrace',

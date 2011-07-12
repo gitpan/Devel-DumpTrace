@@ -1,5 +1,11 @@
 Revision history for Devel-DumpTrace
 
+0.13    2011-07-12
+	Evaluate subscript arguments and provide smarter abbreviations
+	    of large arrays and hashes.
+	Upgrade bundled Text::Shorten to 0.04.
+	Detect when implicit $_~~ is used in some given/when blocks.
+
 0.12    2011-03-22
 	Support for DUMPTRACE_PID and DUMPTRACE_TIME env var.
 	Support for DUMPTRACE_FH=tty.

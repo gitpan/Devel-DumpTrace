@@ -16,29 +16,31 @@ eval 'use Time::HiRes qw(time)';    ## no critic (StringyEval)
 
 
 BEGIN {
-  if (defined $ENV{DUMPTRACE}) {
-    my @kv;
-    if ($ENV{DUMPTRACE} =~ /;/) {
-      @kv = split /;/, $ENV{DUMPTRACE};
-    } else {
-      @kv = split /,/, $ENV{DUMPTRACE};
+    if (defined $ENV{DUMPTRACE}) {
+	my @kv;
+	if ($ENV{DUMPTRACE} =~ /;/) {
+	    @kv = split /;/, $ENV{DUMPTRACE};
+	} else {
+	    @kv = split /,/, $ENV{DUMPTRACE};
+	}
+	foreach my $kv (@kv) {
+	    my ($k,$v) = split /=/, $kv, 2;
+	    $ENV{"DUMPTRACE_$k"} = $v;
+	}
     }
-    foreach my $kv (@kv) {
-      my ($k,$v) = split /=/, $kv, 2;
-      $ENV{"DUMPTRACE_$k"} = $v;
-    }
-  }
 
-  # open a handle to the console, for debugging
-  open *Devel::DumpTrace::TTY, '>>', $^O eq 'MSWin32' ? 'CON' : '/dev/tty';
+    # open a handle to the console, for debugging
+    open *Devel::DumpTrace::TTY, '>>', $^O eq 'MSWin32' ? 'CON' : '/dev/tty';
 }
 
 use constant DISPLAY_NONE  => 0;  # trace off
 use constant DISPLAY_TERSE => 1;  # concise - 1 trace line per stmnt
 use constant DISPLAY_GABBY => 4;  # verbose - 2-5 trace lines per stmt
-use constant ABBREV_STRONG => 0;  # strong abbreviation of long scalars,
-use constant ABBREV_MILD   => 1;  # mild abbreviation      arrays, hashes
-use constant ABBREV_NONE   => 2;  # no abbreviation
+use constant ABBREV_SMART  => 0;  # strong,smart abbrev of long scalars,
+use constant ABBREV_STRONG => 1;  # strong abbreviation of long scalars,
+use constant ABBREV_MILD_SM => 2;  # mild abbreviation      arrays, hashes
+use constant ABBREV_MILD   => 3;  # mild abbreviation      arrays, hashes
+use constant ABBREV_NONE   => 4;  # no abbreviation
 
 # include subroutine name in trace output?
 use constant OUTPUT_SUB => !($ENV{DUMPTRACE_NO_SUB} || 0) || 0;
@@ -49,7 +51,7 @@ use constant OUTPUT_TIME => $ENV{DUMPTRACE_TIME} || 0;
 use constant CALLER_PKG => 0;     # package name
 use constant CALLER_SUB => 3;     # current subroutine name
 
-our $VERSION = '0.12';
+our $VERSION = '0.13';
 our $ARRAY_ELEM_SEPARATOR = ',';
 our $HASH_ENTRY_SEPARATOR = ';';
 our $HASH_PAIR_SEPARATOR = '=>';
@@ -58,6 +60,7 @@ our $SEPARATOR = "-------------------------------------------\n";
 
 my $pid = $$;
 our $DUMPTRACE_FH;
+our $SMART_ABBREV = 1;
 our $DB_ARGS_DEPTH = 3;
 our %EXCLUDE_PKG = ();
 our %INCLUDE_PKG = ('main' => 1);
@@ -67,7 +70,7 @@ our (%DEFERRED, $PAD_MY, $PAD_OUR, $TRACE);
 our $_GLOBAL_DESTRUCTION = 0;
 our $_INIT = 0;
 
-my (@matches);
+my (@matches, %sources);
 my @_INC = @lib::ORIG_INC ? @lib::ORIG_INC : @INC;
 
 # these variables are always qualified into the 'main' package,
@@ -81,251 +84,281 @@ my %esc = ("\a" => '\a', "\b" => '\b', "\t" => '\t', "\n" => '\n',
 
 # use PPI by default, if available
 $Devel::DumpTrace::NO_PPI
-  || $ENV{DUMPTRACE_NOPPI}
-  || eval 'use Devel::DumpTrace::PPI;1';          ## no critic (StringyEval)
+    || $ENV{DUMPTRACE_NOPPI}
+    || eval 'use Devel::DumpTrace::PPI;1';          ## no critic (StringyEval)
 
 {
-  *Devel::Trace::TRACE = \$TRACE;
-  tie $TRACE, 'Devel::DumpTrace::VerboseLevel';
-  if (defined $ENV{DUMPTRACE_LEVEL}) {
-    $TRACE = $ENV{DUMPTRACE_LEVEL};
-  } else {
-    $TRACE = 'default';
-  }
-
-  *DB::DB = \&DB__DB unless defined &DB::DB;
-
-  if (defined $ENV{DUMPTRACE_FH}) {
-    if (uc $ENV{DUMPTRACE_FH} eq 'STDOUT') {
-      $DUMPTRACE_FH = *STDOUT;
-    } elsif (uc $ENV{DUMPTRACE_FH} eq 'TTY') {
-      my $tty = $^O eq 'MSWin32' ? 'CON' : '/dev/tty';
-      unless (open $DUMPTRACE_FH, '>>', $tty) {
-	warn "Failed to open tty as requsted by ",
-	  "DUMPTRACE_FH=$ENV{DUMPTRACE_FH}. Failover to STDERR\n";
-	$DUMPTRACE_FH = *STDERR;
-      }
-      $DUMPTRACE_FH->autoflush(1);
+    *Devel::Trace::TRACE = \$TRACE;
+    tie $TRACE, 'Devel::DumpTrace::VerboseLevel';
+    if (defined $ENV{DUMPTRACE_LEVEL}) {
+	$TRACE = $ENV{DUMPTRACE_LEVEL};
     } else {
-      ## no critic (BriefOpen)
-      unless (open $DUMPTRACE_FH, '>', $ENV{DUMPTRACE_FH}) {
-	die "Can't use $ENV{DUMPTRACE_FH} as trace output file: $!\n",
-	  "Devel::DumpTrace module is quitting.\n";
-      }
-      $DUMPTRACE_FH->autoflush(1);
+	$TRACE = 'default';
     }
-  } else {
-    $DUMPTRACE_FH = *STDERR;
-  }
+
+    *DB::DB = \&DB__DB unless defined &DB::DB;
+
+    if (defined $ENV{DUMPTRACE_FH}) {
+	if (uc $ENV{DUMPTRACE_FH} eq 'STDOUT') {
+	    $DUMPTRACE_FH = *STDOUT;
+	} elsif (uc $ENV{DUMPTRACE_FH} eq 'TTY') {
+	    my $tty = $^O eq 'MSWin32' ? 'CON' : '/dev/tty';
+	    unless (open $DUMPTRACE_FH, '>>', $tty) {
+		warn "Failed to open tty as requsted by ",
+	 	    "DUMPTRACE_FH=$ENV{DUMPTRACE_FH}. Failover to STDERR\n";
+		    $DUMPTRACE_FH = *STDERR;
+	    }
+	    $DUMPTRACE_FH->autoflush(1);
+	} else {
+	    ## no critic (BriefOpen)
+	    unless (open $DUMPTRACE_FH, '>', $ENV{DUMPTRACE_FH}) {
+		die "Can't use $ENV{DUMPTRACE_FH} as trace output file: $!\n",
+		    "Devel::DumpTrace module is quitting.\n";
+	    }
+	    $DUMPTRACE_FH->autoflush(1);
+	}
+    } else {
+	$DUMPTRACE_FH = *STDERR;
+    }
+    $SMART_ABBREV = 0 if $ENV{DUMPTRACE_DUMB_ABBREV};
 }
 
 sub import {
-  my ($class, @args) = @_;
+    my ($class, @args) = @_;
 
-  push @EXCLUDE_PATTERN, map { '^' . substr($_,1) . '$' } grep { /^-/ } @args;
-  push @INCLUDE_PATTERN, map { '^' . substr($_,1) . '$' } grep { /^\+/ } @args;
-  # these packages will be included/excluded at CHECK time, after 
-  # all packages have been loaded 
+    push @EXCLUDE_PATTERN, map { '^' . substr($_,1) . '$' } grep { /^-/ } @args;
+    push @INCLUDE_PATTERN, map { '^' . substr($_,1) . '$' } grep { /^\+/ }@args;
+    # these packages will be included/excluded at CHECK time, after 
+    # all packages have been loaded 
 
-  push @EXCLUDE_PATTERN, 
-    map { '^' . $_ . '$' } split /,/, $ENV{DUMPTRACE_EXCLPKG} || '';
-  push @INCLUDE_PATTERN, 
-    map { '^' . $_ . '$' } split /,/, $ENV{DUMPTRACE_INCLPKG} || '';
+    push @EXCLUDE_PATTERN, 
+        map { '^' . $_ . '$' } split /,/, $ENV{DUMPTRACE_EXCLPKG} || '';
+    push @INCLUDE_PATTERN, 
+        map { '^' . $_ . '$' } split /,/, $ENV{DUMPTRACE_INCLPKG} || '';
 
-  @args = grep { /^[^+-]/ } @args;
-  if (@args > 0) {
-    $TRACE = join ',', @args;
-  }
-  return;
+    @args = grep { /^[^+-]/ } @args;
+    if (@args > 0) {
+	$TRACE = join ',', @args;
+    }
+    return;
 }
 
 our $ZZ = 0;
 
 sub DB__DB {
-  return if $_GLOBAL_DESTRUCTION ; # && !$DB::single;
-  return unless $Devel::DumpTrace::TRACE;
+    return if $_GLOBAL_DESTRUCTION ; # && !$DB::single;
+    return unless $Devel::DumpTrace::TRACE;
 
-  my ($p, $f, $l) = caller();
-  my (undef, undef, undef, $sub) = caller(1);
-  $sub ||= '__top__';
-  $sub =~ s/::$/::__top__/;
+    my ($p, $f, $l) = caller();
+    my (undef, undef, undef, $sub) = caller(1);
+    $sub ||= '__top__';
+    $sub =~ s/::$/::__top__/;
 
-  if ($DB::single < 2) {
-    return if _exclude_pkg($f,$p,$l);
-    return if _display_style() == DISPLAY_NONE;
-  }
+    if ($DB::single < 2) {
+	return if _exclude_pkg($f,$p,$l);
+	return if _display_style() == DISPLAY_NONE;
+    }
 
-  handle_deferred_output($sub, $f);
-  my $code = get_source($f,$l);
+    handle_deferred_output($sub, $f);
+    my $code = get_source($f,$l);
 
-  save_pads(1);
-  save_previous_regex_matches();
-  evaluate_and_display_line($code, $p, $f, $l, $sub);
-  return;
+    save_pads(1);
+    save_previous_regex_matches();
+    evaluate_and_display_line($code, $p, $f, $l, $sub);
+    return;
 }
 
-
-my %sources = ();
 sub get_source {
-  my ($file, $line) = @_;
-  no strict 'refs';                    ## no critic (NoStrict)
+    my ($file, $line) = @_;
+    no strict 'refs';                    ## no critic (NoStrict)
 
-  if (!defined $sources{$file}) {
-    # die "source not available for $file ...\n";
-    my $source_key = "::_<" . $file;
-    eval {
-      $sources{$file} = [ @{$source_key} ]
-    };
-    if ($@) {
-      # this happens when we are poking around the symbol table?
-      # are we corrupting the source file data somehow?
+    if (!defined $sources{$file}) {
+	# die "source not available for $file ...\n";
+	my $source_key = "::_<" . $file;
+	eval {
+	    $sources{$file} = [ @{$source_key} ]
+	};
+	if ($@) {
+	    # this happens when we are poking around the symbol table?
+	    # are we corrupting the source file data somehow?
 
-      $sources{$file} = [ ("SOURCE NOT AVAILABLE FOR file $file: $@") x 999 ];
-      if (open my $grrrrr, '<', $file) {
-	$sources{$file} = [ "", <$grrrrr> ];
-	warn "Source for \"$file\" not loaded automatically at debugger level ...\n";
-	close $grrrrr;
-      }
+	    $sources{$file} = [ 
+		("SOURCE NOT AVAILABLE FOR file $file: $@") x 999 
+	    ];
+	    if (open my $grrrrr, '<', $file) {
+		$sources{$file} = [ "", <$grrrrr> ];
+		warn "Source for \"$file\" not loaded ",
+		    "automatically at debugger level ...\n";
+		close $grrrrr;
+	    }
+	}
     }
-  }
-  return $sources{$file}->[$line];
+    return $sources{$file}->[$line];
 }
 
 sub _exclude_pkg {
-  my($file,$pkg,$line) = @_;
+    my($file,$pkg,$line) = @_;
 
-  local *STDERR = *Devel::DumpTrace::TTY;
+    local *STDERR = *Devel::DumpTrace::TTY;
 
-  return 0 if $INCLUDE_PKG{$pkg} || $INCLUDE_PKG{$file};
-  foreach (@INCLUDE_PATTERN) {
-    if ($pkg =~ $_) {
-      $INCLUDE_PKG{$pkg} = 1;
-      return 0;
+    return 0 if $INCLUDE_PKG{$pkg} || $INCLUDE_PKG{$file};
+    foreach (@INCLUDE_PATTERN) {
+	if ($pkg =~ $_) {
+	    $INCLUDE_PKG{$pkg} = 1;
+	    return 0;
+	}
     }
-  }
 
-  return 1 if $EXCLUDE_PKG{$pkg} || $EXCLUDE_PKG{$file};
-  foreach (@EXCLUDE_PATTERN) {
-    if ($pkg =~ $_) {
-      return $EXCLUDE_PKG{$pkg}=1 if $pkg =~ $_;
+    return 1 if $EXCLUDE_PKG{$pkg} || $EXCLUDE_PKG{$file};
+    foreach (@EXCLUDE_PATTERN) {
+	if ($pkg =~ $_) {
+	    return $EXCLUDE_PKG{$pkg}=1 if $pkg =~ $_;
+	}
     }
-  }
-  return 0 if _package_style() > DISPLAY_NONE;
+    return 0 if _package_style() > DISPLAY_NONE;
 
-  # exclude files from @_INC when _package_style() is 0
-  foreach my $inc (@_INC) {
-    if (index($inc,"/") >= 0 && index($file,$inc) == 0) {
-      return $EXCLUDE_PKG{$file} = $EXCLUDE_PKG{$pkg} = 1;
+    # exclude files from @_INC when _package_style() is 0
+    foreach my $inc (@_INC) {
+	if (index($inc,"/") >= 0 && index($file,$inc) == 0) {
+	    return $EXCLUDE_PKG{$file} = $EXCLUDE_PKG{$pkg} = 1;
+	}
     }
-  }
-  $INCLUDE_PKG{$pkg} = 1;
+    $INCLUDE_PKG{$pkg} = 1;
 
-  return 0;
+    return 0;
 }
 
 # map $TRACE variable to a display style
-sub _display_style {
-  return (DISPLAY_TERSE,
-	  DISPLAY_TERSE,
-	  DISPLAY_TERSE,
-	  DISPLAY_TERSE,
-	  DISPLAY_GABBY,
-	  DISPLAY_GABBY,
-	  DISPLAY_GABBY,
-	  DISPLAY_GABBY,
-	  DISPLAY_GABBY,
-	  DISPLAY_GABBY)[$TRACE % 10];
+sub _display_style_old {
+    return (DISPLAY_TERSE,
+	    DISPLAY_TERSE,
+	    DISPLAY_TERSE,
+	    DISPLAY_TERSE,
+	    DISPLAY_GABBY,
+	    DISPLAY_GABBY,
+	    DISPLAY_GABBY,
+	    DISPLAY_GABBY,
+	    DISPLAY_GABBY,
+	    DISPLAY_GABBY)[$TRACE % 10];
+}
+sub _display_style_new {
+    return (DISPLAY_TERSE,
+	    DISPLAY_TERSE,
+	    DISPLAY_TERSE,
+	    DISPLAY_TERSE,
+	    DISPLAY_TERSE,
+	    DISPLAY_GABBY,
+	    DISPLAY_GABBY,
+	    DISPLAY_GABBY,
+	    DISPLAY_GABBY,
+	    DISPLAY_GABBY)[$TRACE % 10];
 }
 
 # map $TRACE variable to an abbreviation style
-sub _abbrev_style {
-  return (ABBREV_STRONG,
-	  ABBREV_STRONG,
-	  ABBREV_MILD,
-	  ABBREV_NONE,
-	  ABBREV_MILD,
-	  ABBREV_NONE,
-	  ABBREV_NONE,
-	  ABBREV_NONE,
-	  ABBREV_NONE,
-	  ABBREV_NONE,)[$TRACE % 10]
+sub _abbrev_style_old {
+    return (ABBREV_SMART,
+	    ABBREV_SMART,
+	    ABBREV_MILD_SM,
+	    ABBREV_NONE,
+	    ABBREV_MILD_SM,
+	    ABBREV_NONE,
+	    ABBREV_NONE,
+	    ABBREV_NONE,
+	    ABBREV_NONE,
+	    ABBREV_NONE,)[$TRACE % 10]
+}
+sub _abbrev_style_new {
+    return (ABBREV_SMART,
+	    ABBREV_SMART,
+	    ABBREV_STRONG,
+	    ABBREV_MILD_SM,
+	    ABBREV_MILD,
+	    ABBREV_NONE,
+	    ABBREV_SMART,
+	    ABBREV_STRONG,
+	    ABBREV_MILD_SM,
+	    ABBREV_NONE,)[$TRACE % 10]
 }
 
+*_display_style = *_display_style_old;
+*_abbrev_style = *_abbrev_style_old;
+
 sub _package_style {
-  return $TRACE >= 100;
+    return $TRACE >= 100;
 }
 
 sub save_pads {
-  my $n = shift || 0;
-  my $target_depth = current_depth() - $n - 1;
+    my $n = shift || 0;
+    my $target_depth = current_depth() - $n - 1;
 
-  if ($target_depth < 0) {
-    Carp::cluck "save_pads: request for negative frame ",
+    if ($target_depth < 0) {
+	Carp::cluck "save_pads: request for negative frame ",
 	current_depth(), " $target_depth $n at ";
+	return;
+    }
+    if ($n < 0) {
+	Carp::cluck "save_pads: request for shallow frame ",
+	    current_depth(), " $target_depth $n at ";
+	return;
+    }
+
+    eval {
+	$PAD_MY = PadWalker::peek_my($n + 1);
+	$PAD_OUR = PadWalker::peek_our($n + 1);
+	1;
+    } or do {
+	Carp::confess("$@ from PadWalker: \$n=$n is too large.\n",
+		      "Target depth was $target_depth\n");
+    };
+
+    # add extra data to the pads so that they can be refreshed
+    # at an arbitrary point in the future
+    $PAD_MY->{__DEPTH__} = $PAD_OUR->{__DEPTH__} = current_depth() - $n - 1;
+
     return;
-  }
-  if ($n < 0) {
-    Carp::cluck "save_pads: request for shallow frame ",
-	current_depth(), " $target_depth $n at ";
-    return;
-  }
-
-  eval {
-    $PAD_MY = PadWalker::peek_my($n + 1);
-    $PAD_OUR = PadWalker::peek_our($n + 1);
-    1;
-  } or do {
-    Carp::confess("$@ from PadWalker: \$n=$n is too large.\n",
-		  "Target depth was $target_depth\n");
-  };
-
-  # add extra data to the pads so that they can be refreshed
-  # at an arbitrary point in the future
-  $PAD_MY->{__DEPTH__} = $PAD_OUR->{__DEPTH__} = current_depth() - $n - 1;
-
-  return;
 }
 
 sub current_depth {
-  my $n = 0;
-  $n++ while caller($n);
-  return $n-1;
+    my $n = 0;
+    $n++ while caller($n);
+    return $n-1;
 }
 
 sub refresh_pads {
-  return if $_GLOBAL_DESTRUCTION;
-  my $current = current_depth();
-  my $target = $PAD_MY->{__DEPTH__};
-  save_pads($current - $target);
-  return;
+    return if $_GLOBAL_DESTRUCTION;
+    my $current = current_depth();
+    my $target = $PAD_MY->{__DEPTH__};
+    save_pads($current - $target);
+    return;
 }
 
 sub evaluate_and_display_line {
-  my ($code, $p, $f, $l, $sub) = @_;
-  my $style = _display_style();
+    my ($code, $p, $f, $l, $sub) = @_;
+    my $style = _display_style();
 
-  if ($style > DISPLAY_TERSE) {
-    separate();
-    print {$DUMPTRACE_FH} ">>    ", current_position_string($f,$l,$sub), "\n";
-    print {$DUMPTRACE_FH} ">>> \t\t $code";  # [orig]
-  }
-
-  # look for assignment operator.
-  $DEFERRED{"$sub : $f"} ||= [];
-  #$code .= '';
-  if ($code    =~ m{[-+*/&|^.%]?=[^=>]} 
-      || $code =~ m{[\b*&|/<>]{2}=\b}   ) {
-
-    my ($expr1, $op, $expr2) = ($`, $&, $');
-
-    if ($style < DISPLAY_GABBY) {
-      $expr2 = perform_extended_variable_substitutions($op . $expr2, $p);
-    } else {
-      $expr2 = perform_variable_substitutions($op . $expr2, $p);
+    if ($style > DISPLAY_TERSE) {
+	separate();
+	print {$DUMPTRACE_FH} ">>    ",
+	    current_position_string($f,$l,$sub), "\n";
+	print {$DUMPTRACE_FH} ">>> \t\t $code";  # [orig]
     }
 
-    push @{$DEFERRED{"$sub : $f"}},
-      { PACKAGE => $p,
+    # look for assignment operator.
+    $DEFERRED{"$sub : $f"} ||= [];
+    if ($code    =~ m{[-+*/&|^.%]?=[^=>]} 
+	|| $code =~ m{[\b*&|/<>]{2}=\b}   ) {
+
+	my ($expr1, $op, $expr2) = ($`, $&, $');   # ');
+
+	if ($style < DISPLAY_GABBY) {
+
+	    $expr2 = perform_extended_variable_substitutions($op . $expr2, $p);
+	} else {
+	    $expr2 = perform_variable_substitutions($op . $expr2, $p);
+	}
+
+	push @{$DEFERRED{"$sub : $f"}},
+	{ PACKAGE => $p,
 	  MY_PAD  => $PAD_MY,
 	  OUR_PAD => $PAD_OUR,
 	  SUB     => $sub,
@@ -335,100 +368,99 @@ sub evaluate_and_display_line {
 	  EXPRESSION => [ $expr1, $expr2 ] 
 	};
 
-    if ("$expr1$expr2" ne $code) {
-      if ($style >= DISPLAY_GABBY) {
-	print {$DUMPTRACE_FH} ">>>> \t\t $expr1$expr2";  # [pre eval]
-      }
+	if ("$expr1$expr2" ne $code) {
+	    if ($style >= DISPLAY_GABBY) {
+		print {$DUMPTRACE_FH} ">>>> \t\t $expr1$expr2";  # [pre eval]
+	    }
+	}
+	return;
+    } else {
+	push @{$DEFERRED{"$sub : $f"}}, undef;
+    }
+
+    my $xcode;
+
+    # if this is a simple lexical declaration and NOT an assignment,
+    # then don't perform variable substitution:
+    #          my $k;
+    #          my ($a,$b,@c);
+    #          our $ZZZ;
+
+    if ($code    =~ /^ \s* (my|our) \s*
+                    [\$@%*\(] /x           # lexical declaration
+	&& $code =~ / (?<!;) .* ;
+                    \s* (\# .* )? $/x   # single statement, single line
+	&& $code !~ /=/) {                # NOT an assignment
+
+	$xcode = $code;
+
+    } else {
+
+	$xcode = perform_variable_substitutions($code, $p);
+
+    }
+  
+    if ($style >= DISPLAY_GABBY) {
+	if ($xcode ne $code) {
+	    print {$DUMPTRACE_FH} ">>>> \t\t $xcode";     # [pre eval]
+	}
+    } elsif ($style == DISPLAY_TERSE) {
+	print {$DUMPTRACE_FH} ">>>>  ", 
+	current_position_string($f,$l,$sub),"\t\t $xcode";
     }
     return;
-  } else {
-    push @{$DEFERRED{"$sub : $f"}}, undef;
-  }
-
-  my $xcode;
-
-  # if this is a simple lexical declaration and NOT an assignment,
-  # then don't perform variable substitution:
-  #          my $k;
-  #          my ($a,$b,@c);
-  #          our $ZZZ;
-
-  if ($code    =~ /^ \s* (my|our) \s*
-                    [\$@%*\(] /x           # lexical declaration
-      && $code =~ / (?<!;) .* ;
-                    \s* (\# .* )? $/x   # single statement, single line
-      && $code !~ /=/) {                # NOT an assignment
-
-    $xcode = $code;
-
-  } else {
-
-    $xcode = perform_variable_substitutions($code, $p);
-
-  }
-  # $xcode .= '';
-  
-  if ($style >= DISPLAY_GABBY) {
-    if ($xcode ne $code) {
-      print {$DUMPTRACE_FH} ">>>> \t\t $xcode";     # [pre eval]
-    }
-  } elsif ($style == DISPLAY_TERSE) {
-    print {$DUMPTRACE_FH} ">>>>  ", 
-      current_position_string($f,$l,$sub),"\t\t $xcode";
-  }
-  return;
 }
 
 sub separate {
-  if ($Devel::DumpTrace::SEPARATOR_USED++) {
-    print {$DUMPTRACE_FH} $SEPARATOR;
-  }
-  return;
+    if ($Devel::DumpTrace::SEPARATOR_USED++) {
+	print {$DUMPTRACE_FH} $SEPARATOR;
+    }
+    return;
 }
 
 sub dump_scalar {
-  my $scalar = $_[0];
-  # was  my $scalar = shift   and was   my ($scalar) = @_;
-  # but they caused "Modification of a read-only value attempted"
-  # error with Perl 5.8.8
+    my $scalar = $_[0];
+    # was  my $scalar = shift   and was   my ($scalar) = @_;
+    # but they caused "Modification of a read-only value attempted"
+    # error with Perl 5.8.8
 
-  return 'undef' if !defined $scalar;
-  if (Scalar::Util::looks_like_number($scalar)) {
-    $scalar =~ s/^\s+//;
-    $scalar =~ s/\s+$//;
-    return _abbreviate_scalar($scalar);
-  }
-  if (ref $scalar) {
-    if (Scalar::Util::reftype($scalar) eq 'ARRAY') {
-      return '[' . array_repr($scalar) . ']';
+    return 'undef' if !defined $scalar;
+    if (Scalar::Util::looks_like_number($scalar)) {
+	$scalar =~ s/^\s+//;
+	$scalar =~ s/\s+$//;
+	return _abbreviate_scalar($scalar);
     }
-    if (Scalar::Util::reftype($scalar) eq 'HASH') {
-      return '{' . hash_repr($scalar) . '}';
+    if (ref $scalar) {
+	if (Scalar::Util::reftype($scalar) eq 'ARRAY') {
+	    return '[' . array_repr($scalar) . ']';
+	}
+	if (Scalar::Util::reftype($scalar) eq 'HASH') {
+	    return '{' . hash_repr($scalar) . '}';
+	}
+	return $scalar;
     }
-    return $scalar;
-  }
-  if (ref \$scalar eq 'GLOB') {
-    return $scalar;
-  }
-  my $qq = _qquote($scalar);
-  if ($qq ne $scalar) {
-    return _abbreviate_scalar(qq("$qq"));
-  }
-  return _abbreviate_scalar(qq('$scalar'));
+    if (ref \$scalar eq 'GLOB') {
+	return $scalar;
+    }
+    my $qq = _qquote($scalar);
+    if ($qq ne $scalar) {
+	return _abbreviate_scalar(qq("$qq"));
+    }
+    return _abbreviate_scalar(qq('$scalar'));
 }
 
 sub _abbreviate_scalar {
-  my ($value) = @_;
-  if (_abbrev_style() >= ABBREV_NONE) {
-    return $value;
-  }
-  if (_abbrev_style() >= ABBREV_MILD) {
-    # mild abbreviation: no token longer than 80 chars
-    return Text::Shorten::shorten_scalar($value, 80);
-  } else {
-    # strong abbreviation: no token longer than 20 chars
-    return Text::Shorten::shorten_scalar($value, 20);
-  }
+    my ($value) = @_;
+    if (_abbrev_style() >= ABBREV_NONE) {
+	return $value;
+    }
+    if (_abbrev_style() > ABBREV_STRONG) {
+	# mild abbreviation: no token longer than 80 chars
+	return Text::Shorten::shorten_scalar($value, 80);
+    } else {
+	# strong abbreviation: no token longer than 20 chars
+	return Text::Shorten::shorten_scalar($value, 20);
+    }
 }
 
 # shamelessly lifted from Data::Dumper::qquote
@@ -436,476 +468,484 @@ sub _abbreviate_scalar {
 # converts a string of arbitrary characters to an ASCII string that
 # produces the original string under double quote interpolation
 sub _qquote {
-  local($_) = shift;
-  s/([\\\"\@\$])/\\$1/g;
-  my $bytes; { use bytes; $bytes = length }
-  ($bytes > length) && s/([^\x00-\x7f])/'\x{'.sprintf("%x",ord($1)).'}'/ge;
-  /[^ !"\#\$%&'()*+,\-.\/0-9:;<=>?\@A-Z[\\\]^_`a-z{|}~]/ || return $_;
+    local($_) = shift;
+    s/([\\\"\@\$])/\\$1/g;
+    my $bytes; { use bytes; $bytes = length }
+    ($bytes > length) && s/([^\x00-\x7f])/'\x{'.sprintf("%x",ord($1)).'}'/ge;
+    /[^ !"\#\$%&'()*+,\-.\/0-9:;<=>?\@A-Z[\\\]^_`a-z{|}~]/ || return $_;
 
-  my $high = shift || '';
-  s/([\a\b\t\n\f\r\e])/$esc{$1}/g;
+    my $high = shift || '';
+    s/([\a\b\t\n\f\r\e])/$esc{$1}/g;
 
-  if (ord('^')==94)  {
-    # no need for 3 digits in escape for these
-    s/([\0-\037])(?!\d)/'\\'.sprintf('%o',ord($1))/eg;
-    s/([\0-\037\177])/'\\'.sprintf('%03o',ord($1))/eg;
-    # all but last branch below not supported --BEHAVIOR SUBJECT TO CHANGE--
-    if ($high eq 'iso8859') {
-      s/([\200-\240])/'\\'.sprintf('%o',ord($1))/eg;
-    } elsif ($high eq 'utf8') {
+    if (ord('^')==94)  {
+	# no need for 3 digits in escape for these
+	s/([\0-\037])(?!\d)/'\\'.sprintf('%o',ord($1))/eg;
+	s/([\0-\037\177])/'\\'.sprintf('%03o',ord($1))/eg;
+	# all but last branch below not supported --BEHAVIOR SUBJECT TO CHANGE--
+	if ($high eq 'iso8859') {
+	    s/([\200-\240])/'\\'.sprintf('%o',ord($1))/eg;
+	} elsif ($high eq 'utf8') {
 #     use utf8;
 #     $str =~ s/([^\040-\176])/sprintf "\\x{%04x}", ord($1)/ge;
-    } elsif ($high eq '8bit') {
-        # leave it as it is
-    } else {
-      s/([\200-\377])/'\\'.sprintf('%03o',ord($1))/eg;
-      s/([^\040-\176])/sprintf "\\x{%04x}", ord($1)/ge;
+	} elsif ($high eq '8bit') {
+	    # leave it as it is
+	} else {
+	    s/([\200-\377])/'\\'.sprintf('%03o',ord($1))/eg;
+	    s/([^\040-\176])/sprintf "\\x{%04x}", ord($1)/ge;
+	}
+    } else { # ebcdic
+	s{([^ !"\#\$%&'()*+,\-.\/0-9:;<=>?\@A-Z[\\\]^_`a-z{|}~])(?!\d)}
+	{my $v = ord($1); '\\'.sprintf(($v <= 037 ? '%o' : '%03o'), $v)}eg;
+	s{([^ !"\#\$%&'()*+,\-.\/0-9:;<=>?\@A-Z[\\\]^_`a-z{|}~])}
+	{'\\'.sprintf('%03o',ord($1))}eg;
     }
-  } else { # ebcdic
-    s{([^ !"\#\$%&'()*+,\-.\/0-9:;<=>?\@A-Z[\\\]^_`a-z{|}~])(?!\d)}
-    {my $v = ord($1); '\\'.sprintf(($v <= 037 ? '%o' : '%03o'), $v)}eg;
-    s{([^ !"\#\$%&'()*+,\-.\/0-9:;<=>?\@A-Z[\\\]^_`a-z{|}~])}
-     {'\\'.sprintf('%03o',ord($1))}eg;
-  }
-  return $_;
+    return $_;
 }
 
 sub hash_repr {
-  my $hashref = shift;
+    my ($hashref, @keys) = @_;
 
-  return '' if !defined $hashref;
-  my $ref = ref $hashref && ref $hashref ne 'HASH'
-    ? ref($hashref) . ': ' : '';
-  my $maxlen = _abbrev_style() < ABBREV_NONE
-    ? _abbrev_style() > ABBREV_STRONG ? 79 : 19 : -1;
-  my $cache_key = join ':', 
-    $maxlen, $HASH_ENTRY_SEPARATOR, $HASH_PAIR_SEPARATOR;
-  my $hash;
+    return '' if !defined $hashref;
+    @keys = () unless $SMART_ABBREV;
+    my $ref = ref $hashref && ref $hashref ne 'HASH'
+	? ref($hashref) . ': ' : '';
+    my $maxlen = _abbrev_style() < ABBREV_NONE
+	? _abbrev_style() > ABBREV_STRONG ? 79 : 19 : -1;
+    my $cache_key = join ':', 
+        $maxlen, $HASH_ENTRY_SEPARATOR, $HASH_PAIR_SEPARATOR;
+    my $hash;
 
-  # When the hash table gets large, tie it to 
-  # Devel::DumpTrace::CachedDisplayedHash and
-  # see if we can avoid some expensive calls
-  # to  Text::Shorten::shorten_hash .
+    # When the hash table gets large, tie it to 
+    # Devel::DumpTrace::CachedDisplayedHash and
+    # see if we can avoid some expensive calls
+    # to  Text::Shorten::shorten_hash .
 
-  if ((Scalar::Util::reftype($hashref)||'') ne 'HASH') {
-    # this can happen with globs, e.g.,  $$glob->{attribute} = value;
-    return "$hashref";
-  }
-
-
-  if (tied(%{$hashref})
-      && ref(tied %{$hashref}) eq 'Devel::DumpTrace::CachedDisplayedHash') {
-
-    my $result = (tied %{$hashref})->get_cache($cache_key);
-    if (defined $result) {
-      return $ref . join $HASH_ENTRY_SEPARATOR,
-	map { join $HASH_PAIR_SEPARATOR, @{$_} } @{$result};
+    if ((Scalar::Util::reftype($hashref)||'') ne 'HASH') {
+	# this can happen with globs, e.g.,  $$glob->{attribute} = value;
+	return "$hashref";
     }
-    $hash = (tied %{$hashref})->{PHASH};
-  } elsif (!tied(%{$hashref}) 
-	   && !__hashref_is_symbol_table($hashref) 
-	   && 100 < scalar keys %{$hashref}) {
 
-    tie %{$hashref}, 'Devel::DumpTrace::CachedDisplayedHash', %{$hashref};
-    $hash = (tied %{$hashref})->{PHASH};
-  } else {
-    $hash = { map { dump_scalar($_) => dump_scalar($hashref->{$_}) }
-	      keys %{$hashref} };
-  }
 
-  my @r;
+    if (tied(%{$hashref})
+	&& @keys == 0
+	&& ref(tied %{$hashref}) eq 'Devel::DumpTrace::CachedDisplayedHash') {
 
-  if (_abbrev_style() < ABBREV_NONE) {
-    @r = Text::Shorten::shorten_hash(
-		$hash, $maxlen,
-		$HASH_ENTRY_SEPARATOR,
-		$HASH_PAIR_SEPARATOR );
-  } else {
-    @r = map { [ $_ => $hash->{$_} ] } keys %{$hash};
-  }
+	my $result = (tied %{$hashref})->get_cache($cache_key);
+	if (defined $result) {
+	    return $ref . join $HASH_ENTRY_SEPARATOR,
+	    map { join $HASH_PAIR_SEPARATOR, @{$_} } @{$result};
+	}
+	$hash = (tied %{$hashref})->{PHASH};
+    } elsif (!tied(%{$hashref}) 
+	     && @keys == 0
+	     && !__hashref_is_symbol_table($hashref) 
+	     && 100 < scalar keys %{$hashref}) {
 
-  if (tied(%{$hashref})
-      && ref(tied %{$hashref}) eq 'Devel::DumpTrace::CachedDisplayedHash') {
-    (tied %{$hashref})->store_cache($cache_key, \@r);
-  }
+	tie %{$hashref}, 'Devel::DumpTrace::CachedDisplayedHash', %{$hashref};
+	$hash = (tied %{$hashref})->{PHASH};
+    } else {
+	$hash = { map { dump_scalar($_) => dump_scalar($hashref->{$_}) }
+		  keys %{$hashref} };
+    }
 
-  return $ref . join $HASH_ENTRY_SEPARATOR,
-    map { join $HASH_PAIR_SEPARATOR, @{$_} } @r;
+    my @r;
+
+    if (_abbrev_style() < ABBREV_NONE) {
+	@r = Text::Shorten::shorten_hash(
+	    $hash, $maxlen,
+	    $HASH_ENTRY_SEPARATOR,
+	    $HASH_PAIR_SEPARATOR, @keys );
+    } else {
+	@r = map { [ $_ => $hash->{$_} ] } keys %{$hash};
+    }
+
+    if (@keys == 0 && tied(%{$hashref})
+	&& ref(tied %{$hashref}) eq 'Devel::DumpTrace::CachedDisplayedHash') {
+	(tied %{$hashref})->store_cache($cache_key, \@r);
+    }
+
+    return $ref . join $HASH_ENTRY_SEPARATOR,
+        map { join $HASH_PAIR_SEPARATOR, @{$_} } @r;
 }
 
 sub __hashref_is_symbol_table {
-  # if we pass a reference to a symbol table in repr_hash,
-  # we don't want to tie it to a D::DT::CachedDisplayedHash.
-  #
-  # Don't know if this is the best method or if it is
-  # perfectly reliable, but it is getting there ...
+    # if we pass a reference to a symbol table in repr_hash,
+    # we don't want to tie it to a D::DT::CachedDisplayedHash.
+    #
+    # Don't know if this is the best method or if it is
+    # perfectly reliable, but it is getting there ...
 
-  use B;
-  my ($hashref) = @_;
-  my $sv = B::svref_2object($hashref);
-  return ref($sv) eq 'B::HV' && $sv->NAME;
+    use B;
+    my ($hashref) = @_;
+    my $sv = B::svref_2object($hashref);
+    return ref($sv) eq 'B::HV' && $sv->NAME;
 }
 
 sub array_repr {
-  my $arrayref = shift;
+    my ($arrayref, @keys) = @_;
 
-  return '' if !defined $arrayref;
-  my $ref = ref $arrayref && ref $arrayref ne 'ARRAY'
-    ? ref($arrayref) . ': ' : '';
-  my $maxlen = _abbrev_style() < ABBREV_NONE
-    ? _abbrev_style() > ABBREV_STRONG ? 79 : 19 : -1;
-  my $cache_key = join ':', $maxlen, $ARRAY_ELEM_SEPARATOR;
-  my $array;
+    return '' if !defined $arrayref;
+    @keys = () unless $SMART_ABBREV;
+    my $ref = ref $arrayref && ref $arrayref ne 'ARRAY'
+	? ref($arrayref) . ': ' : '';
+    my $maxlen = _abbrev_style() < ABBREV_NONE
+	? _abbrev_style() > ABBREV_STRONG ? 79 : 19 : -1;
+    my $cache_key = join ':', $maxlen, $ARRAY_ELEM_SEPARATOR;
+    my $array;
 
-  # When the array gets large, tie it to 
-  # Devel::DumpTrace::CachedDisplayedArray and
-  # see if we can avoid some expensive calls
-  # to  Text::Shorten::shorten_array .
+    # When the array gets large, tie it to 
+    # Devel::DumpTrace::CachedDisplayedArray and
+    # see if we can avoid some expensive calls
+    # to  Text::Shorten::shorten_array .
 
-  if (tied @{$arrayref}
-      && ref(tied @{$arrayref}) eq 'Devel::DumpTrace::CachedDisplayedArray') {
+    if (@keys==0
+	&& tied @{$arrayref}
+	&& ref(tied @{$arrayref}) eq 'Devel::DumpTrace::CachedDisplayedArray') {
 
-    my $result = (tied @{$arrayref})->get_cache($cache_key);
-    if (defined $result) {
-      return $ref . join $ARRAY_ELEM_SEPARATOR, @$result;
+	my $result = (tied @{$arrayref})->get_cache($cache_key);
+	if (defined $result) {
+	    return $ref . join $ARRAY_ELEM_SEPARATOR, @$result;
+	}
+	$array = (tied @{$arrayref})->{PARRAY};
+    } elsif (@keys==0 && !tied(@{$arrayref}) && 100 < scalar @{$arrayref}) {
+	use Devel::DumpTrace::CachedDisplayedArray;
+
+	eval {
+	    tie @{$arrayref}, 'Devel::DumpTrace::CachedDisplayedArray',
+	    	@{$arrayref};
+	    $array = (tied @{$arrayref})->{PARRAY};
+	} or do {
+	    $array = [ map { dump_scalar($_) } @{$arrayref} ];
+	};
+    } else {
+	$array = [ map { dump_scalar($_) } @{$arrayref} ];
     }
-    $array = (tied @{$arrayref})->{PARRAY};
-  } elsif (!tied(@{$arrayref}) && 100 < scalar @{$arrayref}) {
-    use Devel::DumpTrace::CachedDisplayedArray;
 
-    eval {
-      tie @{$arrayref}, 'Devel::DumpTrace::CachedDisplayedArray', @{$arrayref};
-      $array = (tied @{$arrayref})->{PARRAY};
-    } or do {
-      $array = [ map { dump_scalar($_) } @{$arrayref} ];
-    };
-  } else {
-    $array = [ map { dump_scalar($_) } @{$arrayref} ];
-  }
-
-  my @r;
-  if ($maxlen > 0) {
-    @r = Text::Shorten::shorten_array( $array, $maxlen, $ARRAY_ELEM_SEPARATOR);
-  } else {
-    @r = @{$array};
-  }
-  if (tied(@{$arrayref})
-      && ref(tied @{$arrayref}) eq 'Devel::DumpTrace::CachedDisplayedArray') {
-    (tied @{$arrayref})->store_cache($cache_key, \@r);
-  }
-  return $ref . join $ARRAY_ELEM_SEPARATOR, @r;
+    my @r;
+    if ($maxlen > 0) {
+	@r = Text::Shorten::shorten_array(
+	    $array, $maxlen, $ARRAY_ELEM_SEPARATOR, @keys);
+    } else {
+	@r = @{$array};
+    }
+    if (@keys==0
+	&& tied(@{$arrayref})
+	&& ref(tied @{$arrayref}) eq 'Devel::DumpTrace::CachedDisplayedArray') {
+	(tied @{$arrayref})->store_cache($cache_key, \@r);
+    }
+    return $ref . join $ARRAY_ELEM_SEPARATOR, @r;
 }
 
 sub handle_ALL_deferred_output {
-  foreach my $context (keys %DEFERRED) {
-    my ($sub, $file) = split / : /, $context, 2;
-    handle_deferred_output($sub, $file);
-  }
-  return;
+    foreach my $context (keys %DEFERRED) {
+	my ($sub, $file) = split / : /, $context, 2;
+	handle_deferred_output($sub, $file);
+    }
+    return;
 }
 
 sub handle_deferred_output {
-  my ($sub, $file) = @_;
-  my $deferred = pop @{$DEFERRED{"$sub : $file"}};
+    my ($sub, $file) = @_;
+    my $deferred = pop @{$DEFERRED{"$sub : $file"}};
 
-  if (defined $deferred) {
+    if (defined $deferred) {
 
-    my ($expr1, $expr2) = @{$deferred->{EXPRESSION}};
-    my $deferred_pkg = $deferred->{PACKAGE};
-    $PAD_MY = $deferred->{MY_PAD};
-    $PAD_OUR = $deferred->{OUR_PAD};
-    refresh_pads();
-    $PAD_MY->{__STALE__} = $deferred->{MY_PAD};
-    $PAD_OUR->{__STALE__} = $deferred->{OUR_PAD};
-    my ($line);
-    if ($deferred->{DISPLAY_FILE_AND_LINE}) {
-      $file = $deferred->{FILE};
-      $line = $deferred->{LINE};
+	my ($expr1, $expr2) = @{$deferred->{EXPRESSION}};
+	my $deferred_pkg = $deferred->{PACKAGE};
+	$PAD_MY = $deferred->{MY_PAD};
+	$PAD_OUR = $deferred->{OUR_PAD};
+	refresh_pads();
+	$PAD_MY->{__STALE__} = $deferred->{MY_PAD};
+	$PAD_OUR->{__STALE__} = $deferred->{OUR_PAD};
+	my ($line);
+	if ($deferred->{DISPLAY_FILE_AND_LINE}) {
+	    $file = $deferred->{FILE};
+	    $line = $deferred->{LINE};
+	}
+	if (defined($line)) {
+	    print {$DUMPTRACE_FH} ">>>>> ", 
+	        current_position_string($file,$line,$deferred->{SUB}), "\t",
+	        perform_extended_variable_substitutions($expr1, $deferred_pkg),
+	        $expr2;
+	} else {
+	    print {$DUMPTRACE_FH} ">>>>>\t\t ",
+	    perform_variable_substitutions($expr1, $deferred_pkg), $expr2;
+	}
     }
-    if (defined($line)) {
-      print {$DUMPTRACE_FH} ">>>>> ", 
-	current_position_string($file,$line,$deferred->{SUB}), 
-	"\t", perform_extended_variable_substitutions($expr1, $deferred_pkg),
-	$expr2;
-    } else {
-      print {$DUMPTRACE_FH} ">>>>>\t\t ",
-	perform_variable_substitutions($expr1, $deferred_pkg), $expr2;
-    }
-  }
-  return;
+    return;
 }
 
 sub perform_variable_substitutions {
-  my ($xcode, $pkg) = @_;
-  $xcode =~ s{  ([\$\@\%])\s*               # sigil
-                ([\w:]+)                    # package (optional) and var name
-                (\s*->)?                    # optional dereference op
-                (\s*[\[\{])?                # optional subscript
-             }{ 
-                evaluate($1,$2,$3||'',$4||'',$pkg) 
-             }gex;
+    my ($xcode, $pkg) = @_;
+    $xcode =~ s{  ([\$\@\%])\s*               # sigil
+                  ([\w:]+)                    # package (optional) and var name
+                  (\s*->)?                    # optional dereference op
+                  (\s*[\[\{])?                # optional subscript
+               }{ 
+		   evaluate($1,$2,$3||'',$4||'',$pkg) 
+               }gex;
 
-  return $xcode;
+    return $xcode;
 }
 
 sub current_position_string {
-  my ($file, $line, $sub) = @_;
-  if (OUTPUT_TIME) {
-    $file = sprintf "%.3f:%s", time-$^T, $file;
-  }
-  if (OUTPUT_SUB) {
-    $sub ||= '__top__';
-    # $file already probably contains package information.
-    # Keeping it in $sub is _usually_ redundant and makes the
-    # line too long.
-    $sub =~ s/.*:://;
-
-    if (OUTPUT_PID) {
-      return "$$:$file:$line:[$sub]:";
-    } else {
-      return "$file:$line:[$sub]:";
+    my ($file, $line, $sub) = @_;
+    if (OUTPUT_TIME) {
+	$file = sprintf "%.3f:%s", time-$^T, $file;
     }
-  } elsif (OUTPUT_PID) {
-    return "$$:$file:$line:";
-  } else {
-    return "$file:$line:";
-  }
+    if (OUTPUT_SUB) {
+	$sub ||= '__top__';
+	# $file already probably contains package information.
+	# Keeping it in $sub is _usually_ redundant and makes the
+	# line too long.
+	$sub =~ s/.*:://;
+
+	if (OUTPUT_PID) {
+	    return "$$:$file:$line:[$sub]:";
+	} else {
+	    return "$file:$line:[$sub]:";
+	}
+    } elsif (OUTPUT_PID) {
+	return "$$:$file:$line:";
+    } else {
+	return "$file:$line:";
+    }
 }
 
 sub perform_extended_variable_substitutions {
-  my ($xcode, $pkg) = @_;
-  $xcode =~ s{  ([\$\@\%])\s*    # sigil
-                ([\w:]*\w)(?!:)  # var name, may incl. pkg, ends in alphanum
-                (\s*->)?         # optional dereference op
-                (\s*[\[\{])?     # optional subscript
-             }{ $1 . $2 . $XEVAL_SEPARATOR
-               . evaluate($1,$2,$3||'',$4||'',$pkg)
-             }gex;
-  return $xcode;
+    my ($xcode, $pkg) = @_;
+    $xcode =~ s{  ([\$\@\%])\s*    # sigil
+                  ([\w:]*\w)(?!:)  # var name, may incl. pkg, ends in alphanum
+                  (\s*->)?         # optional dereference op
+                  (\s*[\[\{])?     # optional subscript
+               }{ $1 . $2 . $XEVAL_SEPARATOR
+	          . evaluate($1,$2,$3||'',$4||'',$pkg)
+               }gex;
+    return $xcode;
 }
 
 sub get_DB_args {
-  my $depth = 1 + shift;
-  my @z;
-  for (my $i=$depth; $i<=$depth; $i++) {
-    if ($i>=0) {
-      package DB; 
-      my @y = caller($depth); 
-      return if @y==0;
-    }
+    my $depth = 1 + shift;
+    my @z;
+    for (my $i=$depth; $i<=$depth; $i++) {
+	if ($i>=0) {
+	    package DB; 
+	    my @y = caller($depth); 
+	    return if @y==0;
+	}
 
-    # best efforts here. Sometimes this assignment gives a
-    # "Bizarre copy of ARRAY in aassign" error message
-    # (when $depth is too deep and @DB::args is not defined?).
-    eval 'no warnings q/internal/; @z = @DB::args';
-  }
-  return @z;
+	# best efforts here. Sometimes this assignment gives a
+	# "Bizarre copy of ARRAY in aassign" error message
+	# (when $depth is too deep and @DB::args is not defined?).
+	eval 'no warnings q/internal/; @z = @DB::args';
+    }
+    return @z;
 }
 
 # McCabe score: 49
 sub evaluate {
-  my ($sigil, $varname, $deref_op, $index_op, $pkg) = @_;
+    my ($sigil, $varname, $deref_op, $index_op, $pkg, @keys) = @_;
 # return unless defined($sigil) && $sigil ne '';
-  my $v;
+    my $v;
 
-  no strict 'refs';                    ## no critic (NoStrict)
+    no strict 'refs';                    ## no critic (NoStrict)
 
-  $deref_op ||= '';
-  $index_op ||= '';
-  $index_op =~ s/^\s+//;
+    $deref_op ||= '';
+    $index_op ||= '';
+    $index_op =~ s/^\s+//;
 
-  if ($ALWAYS_MAIN{$varname} || $varname =~ /^\d+$/) {
-    $pkg = 'main';
-  }
-  $pkg .= '::';
-  if ($varname =~ /::/ || $pkg eq '<magic>::') {
-    $pkg = '';
-  }
-
-  if ($deref_op) {
-    my $sigvar = "\$$varname";
-    (my $pkgvar = $sigvar) =~ s/\$/\$$pkg/;
-
-    if (defined $PAD_MY->{$sigvar}) {
-      $v = $PAD_MY->{$sigvar};
-    } elsif (defined $PAD_OUR->{$sigvar}) {
-      $v = $PAD_OUR->{$sigvar};
-    } elsif (defined $PAD_MY->{__STALE__}{$sigvar}) {
-      $v = $PAD_MY->{__STALE__}{$sigvar};
-    } elsif (defined $PAD_OUR->{__STALE__}{$sigvar}) {
-      $v = $PAD_OUR->{__STALE__}{$sigvar};
-    } else {
-      $v = eval "\\$pkgvar";                    ## no critic (StringyEval)
+    if ($ALWAYS_MAIN{$varname} || $varname =~ /^\d+$/) {
+	$pkg = 'main';
     }
-    if ($index_op eq '[') {
-      return '[' . array_repr(${$v}) . ']->[';
+    $pkg .= '::';
+    if ($varname =~ /::/ || $pkg eq '<magic>::') {
+	$pkg = '';
     }
+
+    if ($deref_op) {
+	my $sigvar = "\$$varname";
+	(my $pkgvar = $sigvar) =~ s/\$/\$$pkg/;
+
+	if (defined $PAD_MY->{$sigvar}) {
+	    $v = $PAD_MY->{$sigvar};
+	} elsif (defined $PAD_OUR->{$sigvar}) {
+	    $v = $PAD_OUR->{$sigvar};
+	} elsif (defined $PAD_MY->{__STALE__}{$sigvar}) {
+	    $v = $PAD_MY->{__STALE__}{$sigvar};
+	} elsif (defined $PAD_OUR->{__STALE__}{$sigvar}) {
+	    $v = $PAD_OUR->{__STALE__}{$sigvar};
+	} else {
+	    $v = eval "\\$pkgvar";                    ## no critic (StringyEval)
+	}
+	if ($index_op eq '[') {
+	    return '[' . array_repr(${$v}, @keys) . ']->[';
+	}
+	if ($index_op eq '{') {
+	    return '{' . hash_repr(${$v}, @keys) . '}->{';
+	}
+
+	my $reftype = Scalar::Util::reftype(${$v});
+	if (!defined($reftype) || $reftype eq '') {
+	    return '(' . dump_scalar($v) . ')->';
+	} elsif ($reftype eq 'HASH') {
+	    return '{' . hash_repr(${$v}, @keys) . '}->';
+	} elsif ($reftype eq 'ARRAY') {
+	    return '[' . array_repr(${$v}, @keys) . ']->';
+	} else {
+	    return '(' . dump_scalar($v) . ')->';
+	}
+    }
+
     if ($index_op eq '{') {
-      return '{' . hash_repr(${$v}) . '}->{';
+	my $sigvar = "\%$varname";
+	(my $pkgvar = $sigvar) =~ s/\%/\%$pkg/;
+	if (defined($PAD_MY->{$sigvar})) {
+	    $v = $PAD_MY->{$sigvar};
+	} elsif (defined($PAD_OUR->{$sigvar})) {
+	    $v = $PAD_OUR->{$sigvar};
+	} else {
+	    $v = eval "\\$pkgvar";                    ## no critic (StringyEval)
+	}
+	return '(' . hash_repr($v, @keys) . '){';
+    }
+    if ($sigil eq '@') {
+	my $sigvar = "\@$varname";
+	(my $pkgvar = $sigvar) =~ s/\@/\@$pkg/;
+
+	if ($varname eq '_') {
+	    # calling  caller  (1) with arg, (2) in list context,
+	    # (3) from DB package will populate @DB::args, which is
+	    # what we really want.
+	    my $depth = $DB_ARGS_DEPTH;
+	    no warnings 'uninitialized';
+	    while ((caller $depth)[CALLER_SUB] =~ /^\(eval/) {
+		$depth++;
+	    }
+	    $v = [ get_DB_args($depth) ];
+	} elsif (defined($PAD_MY->{$sigvar})) {
+	    $v = $PAD_MY->{$sigvar};
+	} elsif (defined($PAD_OUR->{$sigvar})) {
+	    $v = $PAD_OUR->{$sigvar};
+	} else {
+	    eval {
+		$v = eval "\\" . $pkgvar;            ## no critic (StringyEval)
+	    };
+	    if (!defined $v) {
+		print {$DUMPTRACE_FH} "Devel::DumpTrace: ", 
+		    "Couldn't find $sigvar/$pkgvar in any appropriate scope.\n";
+		$v = [];
+	    }
+	}
+	if ($index_op eq '[') {
+	    return '(' . array_repr($v, @keys) . ')[';
+	}
+	return '(' . array_repr($v, @keys) . ')';
+    }
+    if ($sigil eq '%') {
+	my $sigvar = "\%$varname";
+	(my $pkgvar = $sigvar) =~ s/\%/\%$pkg/;
+	if (defined($PAD_MY->{$sigvar})) {
+	    $v = $PAD_MY->{$sigvar};
+	} elsif (defined($PAD_OUR->{$sigvar})) {
+	    $v = $PAD_OUR->{$sigvar};
+	} else {
+	    $v = eval "\\$pkgvar";                    ## no critic (StringyEval)
+	}
+	return '(' . hash_repr($v) . ')';
+    }
+    if ($sigil eq '$') {
+	if ($index_op eq '[') {
+	    my $sigvar = "\@$varname";
+	    (my $pkgvar = $sigvar) =~ s/\@/\@$pkg/;
+	    if ($varname eq '_') {
+		my $depth = $DB_ARGS_DEPTH;
+		$v = [ get_DB_args($depth) ];
+	    } elsif (defined($PAD_MY->{$sigvar})) {
+		$v = $PAD_MY->{$sigvar};
+	    } elsif (defined($PAD_OUR->{$sigvar})) {
+		$v = $PAD_OUR->{$sigvar};
+	    } else {
+		eval { $v = eval "\\$pkgvar" };    ## no critic (StringyEval)
+		if (!defined $v) {
+		    print {$DUMPTRACE_FH} "Devel::DumpTrace: ",
+		    "Couldn't find $sigvar/$pkgvar in any appropriate scope.\n";
+		    $v = [];
+		}
+	    }
+	    return '(' . array_repr($v, @keys) . ')[';
+	} elsif ($varname =~ /^\d+$/) {
+	    # special regex match var $1,$2,...
+	    $v = $matches[$varname];
+	    return dump_scalar($v);
+	} else {
+
+	    my $sigvar = "\$$varname";
+	    if ($varname eq '_') {
+		$pkg = 'main::';
+	    }
+	    (my $pkgvar = $sigvar) =~ s/\$/\$$pkg/;
+
+	    if (defined($PAD_MY->{$sigvar})) {
+		$v = ${$PAD_MY->{$sigvar}};
+	    } elsif (defined($PAD_OUR->{$sigvar})) {
+		$v = ${$PAD_OUR->{$sigvar}};
+	    } else {
+		$v = eval "$pkgvar";               ## no critic (StringyEval)
+	    }
+	    return dump_scalar($v);
+	}
     }
 
-    my $reftype = Scalar::Util::reftype(${$v});
-    if (!defined($reftype) || $reftype eq '') {
-      return '(' . dump_scalar($v) . ')->';
-    } elsif ($reftype eq 'HASH') {
-      return '{' . hash_repr(${$v}) . '}->';
-    } elsif ($reftype eq 'ARRAY') {
-      return '[' . array_repr(${$v}) . ']->';
-    } else {
-      return '(' . dump_scalar($v) . ')->';
-    }
-  }
-
-  if ($index_op eq '{') {
-    my $sigvar = "\%$varname";
-    (my $pkgvar = $sigvar) =~ s/\%/\%$pkg/;
-    if (defined($PAD_MY->{$sigvar})) {
-      $v = $PAD_MY->{$sigvar};
-    } elsif (defined($PAD_OUR->{$sigvar})) {
-      $v = $PAD_OUR->{$sigvar};
-    } else {
-      $v = eval "\\$pkgvar";                    ## no critic (StringyEval)
-    }
-    return '(' . hash_repr($v) . '){';
-  }
-  if ($sigil eq '@') {
-    my $sigvar = "\@$varname";
-    (my $pkgvar = $sigvar) =~ s/\@/\@$pkg/;
-
-    if ($varname eq '_') {
-      # calling  caller  (1) with arg, (2) in list context,
-      # (3) from DB package will populate @DB::args, which is
-      # what we really want.
-      my $depth = $DB_ARGS_DEPTH;
-      no warnings 'uninitialized';
-      while ((caller $depth)[CALLER_SUB] =~ /^\(eval/) {
-	$depth++;
-      }
-      $v = [ get_DB_args($depth) ];
-    } elsif (defined($PAD_MY->{$sigvar})) {
-      $v = $PAD_MY->{$sigvar};
-    } elsif (defined($PAD_OUR->{$sigvar})) {
-      $v = $PAD_OUR->{$sigvar};
-    } else {
-      eval {
-	$v = eval "\\" . $pkgvar;                 ## no critic (StringyEval)
-      };
-      if (!defined $v) {
-	print {$DUMPTRACE_FH} "Devel::DumpTrace: ", 
-	  "Couldn't find $sigvar/$pkgvar in any appropriate scope.\n";
-	$v = [];
-      }
-    }
-    if ($index_op eq '[') {
-      return '(' . array_repr($v) . ')[';
-    }
-    return '(' . array_repr($v) . ')';
-  }
-  if ($sigil eq '%') {
-    my $sigvar = "\%$varname";
-    (my $pkgvar = $sigvar) =~ s/\%/\%$pkg/;
-    if (defined($PAD_MY->{$sigvar})) {
-      $v = $PAD_MY->{$sigvar};
-    } elsif (defined($PAD_OUR->{$sigvar})) {
-      $v = $PAD_OUR->{$sigvar};
-    } else {
-      $v = eval "\\$pkgvar";                    ## no critic (StringyEval)
-    }
-    return '(' . hash_repr($v) . ')';
-  }
-  if ($sigil eq '$') {
-    if ($index_op eq '[') {
-      my $sigvar = "\@$varname";
-      (my $pkgvar = $sigvar) =~ s/\@/\@$pkg/;
-      if ($varname eq '_') {
-	my $depth = $DB_ARGS_DEPTH;
-        $v = [ get_DB_args($depth) ];
-      } elsif (defined($PAD_MY->{$sigvar})) {
-	$v = $PAD_MY->{$sigvar};
-      } elsif (defined($PAD_OUR->{$sigvar})) {
-	$v = $PAD_OUR->{$sigvar};
-      } else {
-	eval { $v = eval "\\$pkgvar" };        ## no critic (StringyEval)
-        if (!defined $v) {
-	  print {$DUMPTRACE_FH} "Devel::DumpTrace: ",
-	    "Couldn't find $sigvar/$pkgvar in any appropriate scope.\n";
-	  $v = [];
-        }
-      }
-      return '(' . array_repr($v) . ')[';
-    } elsif ($varname =~ /^\d+$/) {
-      # special regex match var $1,$2,...
-      $v = $matches[$varname];
-      return dump_scalar($v);
-    } else {
-
-      my $sigvar = "\$$varname";
-      if ($varname eq '_') {
-	$pkg = 'main::';
-      }
-      (my $pkgvar = $sigvar) =~ s/\$/\$$pkg/;
-
-      if (defined($PAD_MY->{$sigvar})) {
-	$v = ${$PAD_MY->{$sigvar}};
-      } elsif (defined($PAD_OUR->{$sigvar})) {
-	$v = ${$PAD_OUR->{$sigvar}};
-      } else {
-	$v = eval "$pkgvar";                      ## no critic (StringyEval)
-      }
-      return dump_scalar($v);
-    }
-  }
-
-  Carp::confess 'No interpolation done for input: ',
-    "<sigil:$sigil ; varname:$varname ; deref:$deref_op ; ",
-    "index:$index_op ; pkg:$pkg>\n"
+    Carp::confess 'No interpolation done for input: ',
+        "<sigil:$sigil ; varname:$varname ; deref:$deref_op ; ",
+        "index:$index_op ; pkg:$pkg>\n"
 }
 
 sub save_previous_regex_matches {
-  @matches = ($0,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
-	      $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-	      $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,);
+    @matches = ($0,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+		$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+		$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,);
 
-  # XXX - if someone needs more than $30, submit a feature request
-  # (http://rt.cpan.org/NoAuth/ReportBug.html?Queue=Devel-DumpTrace,
-  # or email to bug-Devel-DumpTrace@rt.cpan.org)
-  # and I'll figure something out ...
+    # XXX - if someone needs more than $30, submit a feature request
+    # (http://rt.cpan.org/NoAuth/ReportBug.html?Queue=Devel-DumpTrace,
+    # or email to bug-Devel-DumpTrace@rt.cpan.org)
+    # and I'll figure something out ...
 
-  return;
+    return;
 }
 
 END {
-  $_GLOBAL_DESTRUCTION = 1;
-  if ($$ == $pid) {
-    no warnings 'redefine';
-    handle_ALL_deferred_output();
-    separate() if _display_style() > DISPLAY_TERSE;
-    untie $TRACE;
-    $TRACE = 0;
-    *DB::DB = sub { };
-    if ($DUMPTRACE_FH ne *STDERR && $DUMPTRACE_FH ne *STDOUT) {
-      close $DUMPTRACE_FH;
+    $_GLOBAL_DESTRUCTION = 1;
+    if ($$ == $pid) {
+	no warnings 'redefine';
+	handle_ALL_deferred_output();
+	separate() if _display_style() > DISPLAY_TERSE;
+	untie $TRACE;
+	$TRACE = 0;
+	*DB::DB = sub { };
+	if ($DUMPTRACE_FH ne *STDERR && $DUMPTRACE_FH ne *STDOUT) {
+	    close $DUMPTRACE_FH;
+	}
     }
-  }
 }
 
 ##################################################################
 
 # import Devel::DumpTrace functions to calling namespace. Used in test suite.
 sub import_all {
-  no strict 'refs';                    ## no critic (NoStrict)
-  my $p = caller;
-  *{$p . '::save_pads'} = *save_pads;
-  *{$p . '::evaluate_and_display_line'} = *evaluate_and_display_line;
-  *{$p . '::dump_scalar'} = *dump_scalar;
-  *{$p . '::hash_repr'} = *hash_repr;
-  *{$p . '::array_repr'} = *array_repr;
-  *{$p . '::handle_deferred_output'} = *handle_deferred_output;
-  *{$p . '::substitute'} = *perform_variable_substitutions;
-  *{$p . '::xsubstitute'} = *perform_extended_variable_substitutions;
-  *{$p . '::evaluate'} = *evaluate;
-  *{$p . '::save_previous_regex_matches'} = *save_previous_regex_matches;
-  return;
+    no strict 'refs';                    ## no critic (NoStrict)
+    my $p = caller;
+    *{$p . '::save_pads'} = *save_pads;
+    *{$p . '::evaluate_and_display_line'} = *evaluate_and_display_line;
+    *{$p . '::dump_scalar'} = *dump_scalar;
+    *{$p . '::hash_repr'} = *hash_repr;
+    *{$p . '::array_repr'} = *array_repr;
+    *{$p . '::handle_deferred_output'} = *handle_deferred_output;
+    *{$p . '::substitute'} = *perform_variable_substitutions;
+    *{$p . '::xsubstitute'} = *perform_extended_variable_substitutions;
+    *{$p . '::evaluate'} = *evaluate;
+    *{$p . '::save_previous_regex_matches'} = *save_previous_regex_matches;
+    return;
 }
 
 ##################################################################
@@ -922,37 +962,42 @@ package Devel::DumpTrace::VerboseLevel;
 use Carp;
 
 sub TIESCALAR {
-  my ($pkg) = @_;
-  my $scalar;
-  return bless \$scalar, $pkg;
+    my ($pkg) = @_;
+    my $scalar;
+    return bless \$scalar, $pkg;
 }
 
 sub FETCH {
-  my $self = shift;
-  return ${$self};
+    my $self = shift;
+    return ${$self};
 }
 
 sub STORE {
-  my ($self, $value) = @_;
-  my $old = ${$self};
-  my ($style, $package) = split /,/, $value;
-  $style =~ s/^\s+//;
-  $style =~ s/\s+$//;
-  $style = {verbose=>5, normal=>3, default=>3,
-	    quiet=>1, on=>3, off=>'00'}->{lc $style} || $style;
-  if ($style !~ /^\d+$/) {
-    carp "Unrecognized debugging level $style\n";
-    $style = 3;
-  }
-  ${$self} = $style;
-  if (defined $package) {
-    $package =~ s/^\s+//;
-    $package =~ s/\s+$//;
-    if ($package) {
-      ${$self} += 100;
+    my ($self, $value) = @_;
+
+    #Carp::cluck $self,"->STORE($value) called !\n";
+    return if !defined $value;
+
+    my $old = ${$self};
+    my ($style, $package) = split /,/, $value;
+    $style =~ s/^\s+//;
+    $style =~ s/\s+$//;
+    no warnings 'uninitialized';
+    $style = {verbose=>5, normal=>3, default=>3,
+	      quiet=>1, on=>3, off=>'00'}->{lc $style} || $style;
+    if ($style !~ /^\d+$/) {
+	carp "Unrecognized debugging level $style\n";
+	$style = 3;
     }
-  }
-  return $old;
+    ${$self} = $style;
+    if (defined $package) {
+	$package =~ s/^\s+//;
+	$package =~ s/\s+$//;
+	if ($package) {
+	    ${$self} += 100;
+	}
+    }
+    return $old;
 }
 
 1;
@@ -965,7 +1010,7 @@ Devel::DumpTrace - Evaluate and print out each line before it is executed.
 
 =head1 VERSION
 
-0.12
+0.13
 
 =head1 SYNOPSIS
 

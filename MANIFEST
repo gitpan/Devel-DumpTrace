@@ -48,6 +48,7 @@ t/ppi/26-pkgvars.t
 t/ppi/30-english.t
 t/ppi/31-magic.t
 t/ppi/32-implicit.t
+t/ppi/33-smartabbrev.t
 t/ppi/80-verbose.t
 t/ppi/81-smoke.t
 t/ppi/82-smoke.t
