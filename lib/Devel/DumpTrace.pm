@@ -51,7 +51,7 @@ use constant OUTPUT_TIME => $ENV{DUMPTRACE_TIME} || 0;
 use constant CALLER_PKG => 0;     # package name
 use constant CALLER_SUB => 3;     # current subroutine name
 
-our $VERSION = '0.13';
+our $VERSION = '0.14';
 our $ARRAY_ELEM_SEPARATOR = ',';
 our $HASH_ENTRY_SEPARATOR = ';';
 our $HASH_PAIR_SEPARATOR = '=>';
@@ -1010,7 +1010,7 @@ Devel::DumpTrace - Evaluate and print out each line before it is executed.
 
 =head1 VERSION
 
-0.13
+0.14
 
 =head1 SYNOPSIS
 

@@ -23,7 +23,7 @@ eval {use PPI;
       1}
   or croak "PPI not installed. Can't use Devel::DumpTrace::PPI module";
 
-$Devel::DumpTrace::PPI::VERSION = '0.13';
+$Devel::DumpTrace::PPI::VERSION = '0.14';
 use constant ADD_IMPLICIT_ => 1;
 use constant DECORATE_FOR => 1;
 use constant DECORATE_FOREACH => 1;
@@ -551,13 +551,11 @@ sub evaluate_subscript {
     shift @tokens;
     pop @tokens;
 
-    local $Devel::Trace::TRACE = 'verbose';
-
     for (my $i=0; $i<@tokens; $i++) {
 	if (ref $tokens[$i] eq 'PPI::Token::Symbol') {
 	    my $y0 = $tokens[$i];
 	    my $y1 = perform_variable_substitution(
-		@tokens, $i, _display_style(), $pkg);
+		@tokens, $i, DISPLAY_GABBY, $pkg);
 	}
     }
 
@@ -1254,7 +1252,7 @@ Devel::DumpTrace::PPI - PPI-based version of Devel::DumpTrace
 
 =head1 VERSION
 
-0.13
+0.14
 
 =head1 SYNOPSIS
 

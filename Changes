@@ -1,5 +1,8 @@
 Revision history for Devel-DumpTrace
 
+0.14    2011-07-14
+        Fix for t/ppi/33.t failure on some systems.
+
 0.13    2011-07-12
 	Evaluate subscript arguments and provide smarter abbreviations
 	    of large arrays and hashes.

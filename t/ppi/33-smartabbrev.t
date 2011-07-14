@@ -19,7 +19,8 @@ my $code1 = q{$r[4*(5+6/3+$s-2*2)]};
 my $doc1 = new PPI::Document(\$code1);
 my $s1 = $doc1->find('PPI::Statement');
 my @z1 = preval($s1->[0], 1, __PACKAGE__);
-ok("@z1" =~ /\.\.\.,41,\.\.\./, "smart abbrev of long array");
+ok("@z1" =~ /\.\.\.,41,\.\.\./, "smart abbrev of long array")
+or diag("\@z1 is \"@z1\"");
 
 $s = '50';
 my $code2 = q[$t{'1' . $s . '5'}];
