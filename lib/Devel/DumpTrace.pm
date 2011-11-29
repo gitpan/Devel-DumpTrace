@@ -12,7 +12,12 @@ use strict;
 use warnings;
 # $| = 1;
 
-eval 'use Time::HiRes qw(time)';    ## no critic (StringyEval)
+my $Time_HiRes_avail;
+BEGIN {
+    $Time_HiRes_avail = 0;
+    $Time_HiRes_avail = eval 'use Time::HiRes qw(time);1';
+#    eval 'use Time::HiRes qw(time);$Time_HiRes_avail=1';  ## no critic (StringyEval)
+}
 
 
 BEGIN {
@@ -32,6 +37,10 @@ BEGIN {
     # open a handle to the console, for debugging
     open *Devel::DumpTrace::TTY, '>>', $^O eq 'MSWin32' ? 'CON' : '/dev/tty';
 }
+# compile Devel::DumpTrace::Const AFTER the environment is processed
+use Devel::DumpTrace::Const;
+
+=pod refactored 0.15 moved to Devel::DumpTrace::Const
 
 use constant DISPLAY_NONE  => 0;  # trace off
 use constant DISPLAY_TERSE => 1;  # concise - 1 trace line per stmnt
@@ -46,12 +55,15 @@ use constant ABBREV_NONE   => 4;  # no abbreviation
 use constant OUTPUT_SUB => !($ENV{DUMPTRACE_NO_SUB} || 0) || 0;
 use constant OUTPUT_PID => $ENV{DUMPTRACE_PID} || 0;
 use constant OUTPUT_TIME => $ENV{DUMPTRACE_TIME} || 0;
+use constant OUTPUT_COUNT => $ENV{DUMPTRACE_COUNT} || 0;
 
 # for interpreting list output of  caller
 use constant CALLER_PKG => 0;     # package name
 use constant CALLER_SUB => 3;     # current subroutine name
 
-our $VERSION = '0.14';
+=cut
+
+our $VERSION = '0.15';
 our $ARRAY_ELEM_SEPARATOR = ',';
 our $HASH_ENTRY_SEPARATOR = ';';
 our $HASH_PAIR_SEPARATOR = '=>';
@@ -328,7 +340,10 @@ sub refresh_pads {
     return if $_GLOBAL_DESTRUCTION;
     my $current = current_depth();
     my $target = $PAD_MY->{__DEPTH__};
-    save_pads($current - $target);
+    if ($current >= $target) {
+	save_pads($current - $target);
+    }
+    # $current < $target 
     return;
 }
 
@@ -418,6 +433,13 @@ sub separate {
     return;
 }
 
+# a guard against deep recursion in  dump_scalar  subroutine
+my %_dump_scalar_seen = ();
+
+sub _reset_dump {
+    %_dump_scalar_seen = ();
+}
+
 sub dump_scalar {
     my $scalar = $_[0];
     # was  my $scalar = shift   and was   my ($scalar) = @_;
@@ -431,13 +453,20 @@ sub dump_scalar {
 	return _abbreviate_scalar($scalar);
     }
     if (ref $scalar) {
+	if ($_dump_scalar_seen{$scalar}) {
+	    return "... $scalar (prev. referenced)";
+	}
+	$_dump_scalar_seen{$scalar}++;
+	my $z;
 	if (Scalar::Util::reftype($scalar) eq 'ARRAY') {
-	    return '[' . array_repr($scalar) . ']';
+	    $z = '[' . array_repr($scalar) . ']';
+	} elsif (Scalar::Util::reftype($scalar) eq 'HASH') {
+	    $z = '{' . hash_repr($scalar) . '}';
+	} else {
+	    $z = "$scalar";
 	}
-	if (Scalar::Util::reftype($scalar) eq 'HASH') {
-	    return '{' . hash_repr($scalar) . '}';
-	}
-	return $scalar;
+	delete $_dump_scalar_seen{$scalar};
+	return $z;
     }
     if (ref \$scalar eq 'GLOB') {
 	return $scalar;
@@ -549,7 +578,6 @@ sub hash_repr {
     }
 
     my @r;
-
     if (_abbrev_style() < ABBREV_NONE) {
 	@r = Text::Shorten::shorten_hash(
 	    $hash, $maxlen,
@@ -564,8 +592,16 @@ sub hash_repr {
 	(tied %{$hashref})->store_cache($cache_key, \@r);
     }
 
-    return $ref . join $HASH_ENTRY_SEPARATOR,
-        map { join $HASH_PAIR_SEPARATOR, @{$_} } @r;
+    if (!defined $HASH_PAIR_SEPARATOR) {
+	Carp::cluck("setting \$HASH_PAIR_SEPARATOR definition ...");
+	$HASH_PAIR_SEPARATOR = " =======> ";
+    }
+
+    return $ref . join ($HASH_ENTRY_SEPARATOR,
+    map { join ($HASH_PAIR_SEPARATOR,
+		map{defined($_)?$_:'undef'}@{$_}) } @r);
+
+
 }
 
 sub __hashref_is_symbol_table {
@@ -688,10 +724,19 @@ sub perform_variable_substitutions {
     return $xcode;
 }
 
+my %output_count;
 sub current_position_string {
     my ($file, $line, $sub) = @_;
+    if (OUTPUT_COUNT) {
+	my $cnt = ++$output_count{$file}{$line};
+	$line .= "\[$cnt\]";
+    }
     if (OUTPUT_TIME) {
-	$file = sprintf "%.3f:%s", time-$^T, $file;
+	if ($Time_HiRes_avail) {
+	    $file = sprintf "%.3f:%s", Time::HiRes::time()-$^T, $file;
+	} else {
+	    $file = sprintf "t=%d:%s", time-$^T, $file;
+	}
     }
     if (OUTPUT_SUB) {
 	$sub ||= '__top__';
@@ -747,6 +792,7 @@ sub evaluate {
     my ($sigil, $varname, $deref_op, $index_op, $pkg, @keys) = @_;
 # return unless defined($sigil) && $sigil ne '';
     my $v;
+    _reset_dump();
 
     no strict 'refs';                    ## no critic (NoStrict)
 
@@ -1010,7 +1056,7 @@ Devel::DumpTrace - Evaluate and print out each line before it is executed.
 
 =head1 VERSION
 
-0.14
+0.15
 
 =head1 SYNOPSIS
 
@@ -1556,4 +1602,3 @@ by the Free Software Foundation; or the Artistic License.
 See http://dev.perl.org/licenses/ for more information.
 
 =cut
-

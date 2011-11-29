@@ -8,7 +8,7 @@ no warnings 'redefine';
 # test the distinction between ABBREV_STRONG and new ABBREV_SMART
 
 Devel::DumpTrace::import_all();
-*preval = \&Devel::DumpTrace::preval;
+*preval = \&Devel::DumpTrace::PPI::preval;
 
 *Devel::DumpTrace::_abbrev_style = sub { &Devel::DumpTrace::ABBREV_SMART };
 @r = (1..100);

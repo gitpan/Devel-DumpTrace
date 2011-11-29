@@ -155,7 +155,10 @@ sub shorten_array {
   # my $n = @$array;
   my $n = $#{$array} + 1;
   @key = (0) if @key == 0;
-  @key = sort {$a <=> $b} grep { $_ >= 0 && $_ < $n } @key;
+  {
+      no warnings 'numeric';
+      @key = sort {$a <=> $b} grep { $_ >= 0 && $_ < $n } @key;
+  }
   my @inc = (0) x $n;
 
   my $len = $n > 0 ? $dotslen - 1 : 0;
@@ -297,7 +300,10 @@ sub shorten_hash {
   my $len = 3;
 
   foreach my $key (@hashkeys, keys %$hashkey) {
-    my $dlen = $sep1 + $sep2 + length($key) + length($hash->{$key});
+    my $dlen = $sep1 + $sep2 + length($key);
+    if (defined $hash->{$key}) {
+	$dlen += length($hash->{$key});
+    }
     last if $len + $dlen > $maxlen
       && @r > 0;      # always include at least one key-value pair
     push @r, [ $key, $hash->{$key} ];

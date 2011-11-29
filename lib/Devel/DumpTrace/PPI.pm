@@ -1,6 +1,7 @@
-package Devel::DumpTrace;          ## no critic (FilenameMatchesPackage)
+package Devel::DumpTrace::PPI;          ## no critic (FilenameMatchesPackage)
 
 use Devel::DumpTrace;
+use Devel::DumpTrace::Const;
 use PadWalker;
 use Scalar::Util;
 use Data::Dumper;
@@ -10,9 +11,12 @@ use warnings;
 
 # functions in this file that override functions in Devel/DumpTrace.pm
 
-*get_source = *get_source_PPI;
-*evaluate_and_display_line = *evaluate_and_display_line_PPI;
-*handle_deferred_output = *handle_deferred_output_PPI;
+*Devel::DumpTrace::get_source = *get_source_PPI;
+*Devel::DumpTrace::evaluate_and_display_line = *evaluate_and_display_line_PPI;
+*Devel::DumpTrace::handle_deferred_output = *handle_deferred_output_PPI;
+
+*evaluate = *Devel::DumpTrace::evaluate;
+*current_position_string = *Devel::DumpTrace::current_position_string;
 
 local $| = 1;
 
@@ -23,7 +27,7 @@ eval {use PPI;
       1}
   or croak "PPI not installed. Can't use Devel::DumpTrace::PPI module";
 
-$Devel::DumpTrace::PPI::VERSION = '0.14';
+$Devel::DumpTrace::PPI::VERSION = '0.15';
 use constant ADD_IMPLICIT_ => 1;
 use constant DECORATE_FOR => 1;
 use constant DECORATE_FOREACH => 1;
@@ -61,7 +65,7 @@ sub get_source_PPI {
     my ($file, $line) = @_;
 
     if (!defined $ppi_src{$file}) {
-	_update_ppi_src_for_file($file);
+	eval { _update_ppi_src_for_file($file) };
     }
     return \@{$ppi_src{$file}[$line]};
 }
@@ -237,7 +241,7 @@ sub evaluate_and_display_line_PPI {
 	$statements = [$doc->elements];
     }
 
-    my $style = _display_style();
+    my $style = Devel::DumpTrace::_display_style();
     my $code;
     my @s = _get_decorated_statements($statements, $style);
     $code = join '', map { "$_" } @s;
@@ -247,7 +251,7 @@ sub evaluate_and_display_line_PPI {
 
     my $fh = $Devel::DumpTrace::DUMPTRACE_FH;
     if ($style > DISPLAY_TERSE) {
-	separate();
+	Devel::DumpTrace::separate();
 	print {$fh} ">>    ", current_position_string($file,$line,$sub), "\n";
 	print {$fh} ">>>   \t\t $code";
 	unless ($IGNORE_FILE_LINE{"$file:$line"}) {
@@ -445,9 +449,9 @@ sub handle_deferred_output_PPI {
     my $deferred_pkg = $deferred->{PACKAGE};
     $Devel::DumpTrace::PAD_MY = $deferred->{MY_PAD};
     $Devel::DumpTrace::PAD_OUR = $deferred->{OUR_PAD};
-    refresh_pads();
+    Devel::DumpTrace::refresh_pads();
 
-    my $style = _display_style();
+    my $style = Devel::DumpTrace::_display_style();
     for my $i (0 .. $#e) {
 	if (ref $e[$i] eq 'PPI::Token::Symbol') {
 	    perform_variable_substitution(@e, $i, $style, $deferred_pkg);
@@ -474,8 +478,8 @@ sub handle_deferred_output_PPI {
     if ($deferred->{DISPLAY_FILE_AND_LINE}
 	|| "$file:$sub" ne $last_file_sub_displayed) {
 
-	if (_display_style() > DISPLAY_TERSE) {
-	    separate();
+	if (Devel::DumpTrace::_display_style() > DISPLAY_TERSE) {
+	    Devel::DumpTrace::separate();
 	    print {$fh} ">>>>  ", 
 	        current_position_string($file,$line,$sub), "\n";
 	    print {$fh} ">>>> \t\t $undeferred_output";
@@ -543,8 +547,8 @@ sub perform_variable_substitution {
 sub evaluate_subscript {
     my ($pkg, @tokens) = @_;
 
-    if (_abbrev_style() != ABBREV_SMART
-	&& _abbrev_style() != ABBREV_MILD_SM) {
+    my $abbrev_style = Devel::DumpTrace::_abbrev_style();
+    if ($abbrev_style != ABBREV_SMART && $abbrev_style != ABBREV_MILD_SM) {
 	return ();
     }
 
@@ -1209,7 +1213,7 @@ sub __decorate_statements_in_ifelse_block {
     $element->{__DECORATED__} = 'if-elsif-else';
     $element->{__CONDITIONS__} = [];
     my $ws = '';
-    my $style = _display_style();
+    my $style = Devel::DumpTrace::_display_style();
     for (my $i=0; $i<@gparent_blocks; $i++) {
 	if ($i < @gparent_cond) {
 	    push @{$element->{__CONDITIONS__}}, 
@@ -1252,7 +1256,7 @@ Devel::DumpTrace::PPI - PPI-based version of Devel::DumpTrace
 
 =head1 VERSION
 
-0.14
+0.15
 
 =head1 SYNOPSIS
 

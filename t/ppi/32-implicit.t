@@ -6,15 +6,16 @@ use strict;
 use warnings;
 
 Devel::DumpTrace::import_all();
-*preval = \&Devel::DumpTrace::preval;
+*preval = \&Devel::DumpTrace::PPI::preval;
+*__add_implicit_elements = \&Devel::DumpTrace::PPI::__add_implicit_elements;
 
 sub to_PPI_Statement {
   my $code = shift;
   $::doc = new PPI::Document(\$code);  # must keep document in scope
   my $s = $::doc->find('PPI::Statement');
   for my $ss (@{$s}) {
-    Devel::DumpTrace::__add_implicit_elements($ss);   # added for v0.10
-    Devel::DumpTrace::__add_implicit_to_given_when_blocks($ss)
+    __add_implicit_elements($ss);   # added for v0.10
+    Devel::DumpTrace::PPI::__add_implicit_to_given_when_blocks($ss)
 	if ref($ss) eq 'PPI::Statement::Given';
   }
   return $s->[0];
@@ -27,7 +28,7 @@ sub to_PPI_Statement {
 $_ = "FOOasdfBAR";
 my $doc = new PPI::Document(\'m{asdf} && print "Contains asdf\n"');             #');
 my $s = $doc->find('PPI::Statement');
-Devel::DumpTrace::__add_implicit_elements($s->[0]);
+__add_implicit_elements($s->[0]);
 my @z = preval($s->[0], 1, __PACKAGE__);
 ok("@z" =~ /\$_:.*$_.*=~\s*m\{asdf\}/,
    "implicit \$_=~ inserted before regexp");

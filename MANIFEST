@@ -10,6 +10,7 @@ lib/multilinedemo.pl
 lib/Devel/DumpTrace.pm
 lib/Devel/DumpTrace/CachedDisplayedArray.pm
 lib/Devel/DumpTrace/CachedDisplayedHash.pm
+lib/Devel/DumpTrace/Const.pm
 lib/Devel/DumpTrace/PPI.pm
 lib/Devel/DumpTrace/noPPI.pm
 lib/Text/Shorten.pm
@@ -25,6 +26,7 @@ t/24-substitute.t
 t/25-whitespace.t
 t/26-pkgvars.t
 t/30-english.t
+t/35-recursion.t
 t/40-noppi.t
 t/41-noppi.t
 t/80-verbose.t
@@ -58,3 +60,4 @@ t/ppi/86-smoke.t
 t/ppi/88-smoke.t
 
 META.yml                                 Module meta-data (added by MakeMaker)
+META.json                                Module JSON meta-data (added by MakeMaker)
