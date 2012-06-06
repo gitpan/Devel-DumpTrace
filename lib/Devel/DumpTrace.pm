@@ -8,6 +8,7 @@ use Devel::DumpTrace::CachedDisplayedArray;
 use Devel::DumpTrace::CachedDisplayedHash;
 use IO::Handle;
 use Carp;
+use Storable 'dclone';
 use strict;
 use warnings;
 # $| = 1;
@@ -40,30 +41,7 @@ BEGIN {
 # compile Devel::DumpTrace::Const AFTER the environment is processed
 use Devel::DumpTrace::Const;
 
-=pod refactored 0.15 moved to Devel::DumpTrace::Const
-
-use constant DISPLAY_NONE  => 0;  # trace off
-use constant DISPLAY_TERSE => 1;  # concise - 1 trace line per stmnt
-use constant DISPLAY_GABBY => 4;  # verbose - 2-5 trace lines per stmt
-use constant ABBREV_SMART  => 0;  # strong,smart abbrev of long scalars,
-use constant ABBREV_STRONG => 1;  # strong abbreviation of long scalars,
-use constant ABBREV_MILD_SM => 2;  # mild abbreviation      arrays, hashes
-use constant ABBREV_MILD   => 3;  # mild abbreviation      arrays, hashes
-use constant ABBREV_NONE   => 4;  # no abbreviation
-
-# include subroutine name in trace output?
-use constant OUTPUT_SUB => !($ENV{DUMPTRACE_NO_SUB} || 0) || 0;
-use constant OUTPUT_PID => $ENV{DUMPTRACE_PID} || 0;
-use constant OUTPUT_TIME => $ENV{DUMPTRACE_TIME} || 0;
-use constant OUTPUT_COUNT => $ENV{DUMPTRACE_COUNT} || 0;
-
-# for interpreting list output of  caller
-use constant CALLER_PKG => 0;     # package name
-use constant CALLER_SUB => 3;     # current subroutine name
-
-=cut
-
-our $VERSION = '0.15';
+our $VERSION = '0.16';
 our $ARRAY_ELEM_SEPARATOR = ',';
 our $HASH_ENTRY_SEPARATOR = ';';
 our $HASH_PAIR_SEPARATOR = '=>';
@@ -152,6 +130,7 @@ sub import {
     if (@args > 0) {
 	$TRACE = join ',', @args;
     }
+
     return;
 }
 
@@ -568,13 +547,19 @@ sub hash_repr {
     } elsif (!tied(%{$hashref}) 
 	     && @keys == 0
 	     && !__hashref_is_symbol_table($hashref) 
-	     && 100 < scalar keys %{$hashref}) {
+
+	     # %{dclone $hashref}: copies the hash without
+	     #    resetting an active `each` iterator (RT#77673)
+
+	     && 100 < scalar keys %{(eval{dclone $hashref}||$hashref)}) {
 
 	tie %{$hashref}, 'Devel::DumpTrace::CachedDisplayedHash', %{$hashref};
 	$hash = (tied %{$hashref})->{PHASH};
     } else {
+	# %{dclone $hashref}: copy hash without resetting active `each` iterator
+	my $tmp = eval {dclone $hashref} || $hashref;
 	$hash = { map { dump_scalar($_) => dump_scalar($hashref->{$_}) }
-		  keys %{$hashref} };
+		  keys %$tmp };
     }
 
     my @r;
@@ -584,7 +569,8 @@ sub hash_repr {
 	    $HASH_ENTRY_SEPARATOR,
 	    $HASH_PAIR_SEPARATOR, @keys );
     } else {
-	@r = map { [ $_ => $hash->{$_} ] } keys %{$hash};
+	# dclone: copy hash without resetting active `each` iterator (RT#77673)
+	@r = map { [ $_ => $hash->{$_} ] } keys %{ (eval{dclone $hash} || $hash) };
     }
 
     if (@keys == 0 && tied(%{$hashref})
@@ -1056,7 +1042,7 @@ Devel::DumpTrace - Evaluate and print out each line before it is executed.
 
 =head1 VERSION
 
-0.15
+0.16
 
 =head1 SYNOPSIS
 
@@ -1430,7 +1416,7 @@ Nothing is or can be exported from this module.
 
 =head1 DIAGNOSTICS
 
-Nothing interesting.
+All output from this program is for diagnostics.
 
 =head1 DEPENDENCIES
 
@@ -1438,6 +1424,15 @@ C<Devel::DumpTrace> requires the L<PadWalker|PadWalker>
 and L<Scalar::Util|Scalar::Util> modules.
 
 =head1 BUGS AND LIMITATIONS
+
+=head2 Known bugs
+
+B<< L<RT#77673|https://rt.cpan.org/Ticket/Display.html?id=77673> >>:
+Any programs that used the C<each %hash> construction prior to v0.16 were
+subject to entering an infinite loop. This is still an 
+issue for C<%hash> variables that contain C<GLOB> or C<CODE> values,
+including complex data structures with C<GLOB> and C<CODE> values 
+several levels deep.
 
 =head2 Parser limitations
 
@@ -1448,11 +1443,12 @@ be incorrect or misleading include:
 
     $b = 7;
     $a=4; $b=++$a;
-    >>>>> 4 = 4; 7 = 4;
-    $a=4; $b=++$a;
-    >>>>> 5 = 4; 5 = 5;
+    =================================
+    >>>>>            4=4; 7=++undef;
+    >>>>>            5=4; 7=++4;
 
-All statements on a line are evaluated, not just the statement
+
+All expressions on a line are evaluated, not just expressions in the statement
 currently being executed.
 
 =head3 Statements with chained assignments; complex assignment expressions
@@ -1468,13 +1464,6 @@ currently being executed.
 
 Everything to the right of the I<first> assignment operator in a
 statement is evaluated I<before> the statement is executed.
-
-=head3 Multiple lines for one statement
-
-    $a = ($b + $c                # ==> oops, all this module sees is
-         + $d + $e);             #     $a = ($b + $c
-
-Only the first line of code in an expression is evaluated.
 
 =head3 Displayed value of @_ variable is unreliable
 
@@ -1499,6 +1488,13 @@ and a more basic parser that will be used if C<PPI> is not
 available (or if you explicitly request to use the basic
 parser). This parser is quite crude compared to the PPI-based
 parser, and suffers from these additional known issues:
+
+=head3 Multiple lines for one statement
+
+    $a = ($b + $c                # ==> oops, all this module sees is
+         + $d + $e);             #     $a = ($b + $c
+
+Only the first line of code in an expression is evaluated.
 
 =head3 String literals that contain variable names
 
@@ -1593,7 +1589,7 @@ Marty O'Brien, E<lt>mob at cpan.orgE<gt>
 
 =head1 LICENSE AND COPYRIGHT
 
-Copyright 2010-2011 Marty O'Brien.
+Copyright 2010-2012 Marty O'Brien.
 
 This program is free software; you can redistribute it and/or modify it
 under the terms of either: the GNU General Public License as published

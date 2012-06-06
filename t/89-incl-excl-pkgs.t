@@ -9,6 +9,31 @@ use warnings;
 
 # using +<regex> and -<regex> to include/exclude packages.
 
+
+# on some builds of v5.8.8, and only v5.8.8, there is a bug where
+# 
+#     perl5.8.8 -d:Foo=1 -e 1
+#
+# croaks with the specific compile-time error
+#
+#    "Can't find string terminator ";" anywhere before EOF."
+#
+# instead of working. This test will not work when that
+# bug is present.
+
+if ($] == 5.008008) {
+    my $err = '';
+    $err = qx($^X -d:Foo=1 -e 1 2>&1);
+
+    if ($err =~ /Can't find string terminator .../) {
+      SKIP: {
+	  skip "5.8.8 has a bug with 'perl -d:Foo=bar ...', can't test", 8;
+	}
+	exit 0;
+    }
+}
+
+
 # this test just completely fails on Cygwin 5.8.8?
 # It is ok on other Cygwin versions and on version 5.8.8 on other platforms.
 
@@ -58,7 +83,7 @@ for my $z (0,1,2,3) {
   $ENV{DUMPTRACE_FH} = $file;
   $ENV{DUMPTRACE_LEVEL} = 3;
 
-# print qq<system($^X, "$dmodule$test[$z]", "-Iblib/lib", "-Ilib", "$0.pl")>,"\n";
+  print qq<system($^X, "$dmodule$test[$z]", "-Iblib/lib", "-Ilib", "$0.pl")>,"\n";
   my $c1 = system($^X, "-Iblib/lib", "-Ilib", $dmodule . $test[$z], "$0.pl");
   ok($c1 == 0, "ran test $z successfully") or $keep++;
   open XH, '<', $file;
@@ -71,5 +96,5 @@ for my $z (0,1,2,3) {
 
   unlink $file unless $keep;
 }
-unlink "$0.pl";
+# XXX unlink "$0.pl";
 

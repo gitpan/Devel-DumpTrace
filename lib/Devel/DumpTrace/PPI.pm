@@ -27,7 +27,7 @@ eval {use PPI;
       1}
   or croak "PPI not installed. Can't use Devel::DumpTrace::PPI module";
 
-$Devel::DumpTrace::PPI::VERSION = '0.15';
+$Devel::DumpTrace::PPI::VERSION = '0.16';
 use constant ADD_IMPLICIT_ => 1;
 use constant DECORATE_FOR => 1;
 use constant DECORATE_FOREACH => 1;
@@ -1256,7 +1256,7 @@ Devel::DumpTrace::PPI - PPI-based version of Devel::DumpTrace
 
 =head1 VERSION
 
-0.15
+0.16
 
 =head1 SYNOPSIS
 

@@ -14,6 +14,7 @@ package Devel::DumpTrace::CachedDisplayedHash;
 use strict;
 use warnings;
 use Carp;
+our $VERSION = '0.16';
 
 *dump_scalar = \&Devel::DumpTrace::dump_scalar;
 

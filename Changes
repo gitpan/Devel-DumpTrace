@@ -1,5 +1,11 @@
 Revision history for Devel-DumpTrace
 
+0.16    2012-06-06
+	RT#77673 infinite loop with PPI and each %hash construction, fixed
+	    using Storable::dclone to copy hash without resetting iterator
+	Check,trap whether t/89-incl-exl.t is affected by Perl v5.8.8 bug with
+	    calls like  "perl -d:Foo=arg ..."
+
 0.15    2011-11-28
 	Put PPI into separate Devel::DumpTrace::PPI package.
 	Put useful constants into separate Devel/DumpTrace/Const.pm file

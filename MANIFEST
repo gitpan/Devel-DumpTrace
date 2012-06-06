@@ -35,6 +35,7 @@ t/82-smoke.t
 t/83-smoke.t
 t/84-smoke.t
 t/86-smoke.t
+t/87-smoke-RT77673.t
 t/89-incl-excl-pkgs.t
 t/ppi/00-load.t
 t/ppi/11-dump_scalar.t
@@ -57,6 +58,7 @@ t/ppi/82-smoke.t
 t/ppi/83-smoke.t
 t/ppi/84-smoke.t
 t/ppi/86-smoke.t
+t/ppi/87-smoke-RT77673.t
 t/ppi/88-smoke.t
 
 META.yml                                 Module meta-data (added by MakeMaker)
