@@ -27,7 +27,7 @@ eval {use PPI;
       1}
   or croak "PPI not installed. Can't use Devel::DumpTrace::PPI module";
 
-$Devel::DumpTrace::PPI::VERSION = '0.16';
+$Devel::DumpTrace::PPI::VERSION = '0.17';
 use constant ADD_IMPLICIT_ => 1;
 use constant DECORATE_FOR => 1;
 use constant DECORATE_FOREACH => 1;
@@ -563,7 +563,7 @@ sub evaluate_subscript {
 	}
     }
 
-    my $ref = join ' ', map { ref($_) } @tokens;
+    my $ref = join ' ', map { ref($_), ref(\$_) } @tokens;
     my $key;
 
     # don't evaluate expressions that may have side-effects
@@ -1256,7 +1256,7 @@ Devel::DumpTrace::PPI - PPI-based version of Devel::DumpTrace
 
 =head1 VERSION
 
-0.16
+0.17
 
 =head1 SYNOPSIS
 

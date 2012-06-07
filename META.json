@@ -38,13 +38,13 @@
       },
       "runtime" : {
          "requires" : {
+            "Hash::SafeKeys" : "0.01",
             "PadWalker" : "1.5",
             "Scalar::Util" : "1.14",
-            "Storable" : 0,
             "Test::More" : 0
          }
       }
    },
    "release_status" : "stable",
-   "version" : "0.16"
+   "version" : "0.17"
 }

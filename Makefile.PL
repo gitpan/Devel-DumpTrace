@@ -36,8 +36,8 @@ WriteMakefile(
     PL_FILES            => {},
     PREREQ_PM => {
         'Test::More' => 0,
+	'Hash::SafeKeys' => '0.01',   # RT#77673
 	'PadWalker' => 1.5,
-	'Storable' => 0,
         'Scalar::Util' => '1.14',     # 1.14 has improved reftype()
     },
     dist                => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },

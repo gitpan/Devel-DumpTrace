@@ -1,14 +1,14 @@
 package Devel::DumpTrace;
 
 use 5.008;
+use Hash::SafeKeys;
 use PadWalker;
-use Scalar::Util;
+use Scalar::Util 1.14;
 use Text::Shorten;
 use Devel::DumpTrace::CachedDisplayedArray;
 use Devel::DumpTrace::CachedDisplayedHash;
 use IO::Handle;
 use Carp;
-use Storable 'dclone';
 use strict;
 use warnings;
 # $| = 1;
@@ -41,7 +41,7 @@ BEGIN {
 # compile Devel::DumpTrace::Const AFTER the environment is processed
 use Devel::DumpTrace::Const;
 
-our $VERSION = '0.16';
+our $VERSION = '0.17';
 our $ARRAY_ELEM_SEPARATOR = ',';
 our $HASH_ENTRY_SEPARATOR = ';';
 our $HASH_PAIR_SEPARATOR = '=>';
@@ -426,11 +426,6 @@ sub dump_scalar {
     # error with Perl 5.8.8
 
     return 'undef' if !defined $scalar;
-    if (Scalar::Util::looks_like_number($scalar)) {
-	$scalar =~ s/^\s+//;
-	$scalar =~ s/\s+$//;
-	return _abbreviate_scalar($scalar);
-    }
     if (ref $scalar) {
 	if ($_dump_scalar_seen{$scalar}) {
 	    return "... $scalar (prev. referenced)";
@@ -441,11 +436,18 @@ sub dump_scalar {
 	    $z = '[' . array_repr($scalar) . ']';
 	} elsif (Scalar::Util::reftype($scalar) eq 'HASH') {
 	    $z = '{' . hash_repr($scalar) . '}';
+	} elsif (Scalar::Util::reftype($scalar) eq 'GLOB') {
+	    $z = $scalar;
 	} else {
 	    $z = "$scalar";
 	}
 	delete $_dump_scalar_seen{$scalar};
 	return $z;
+    }
+    if (Scalar::Util::looks_like_number($scalar)) {
+	$scalar =~ s/^\s+//;
+	$scalar =~ s/\s+$//;
+	return _abbreviate_scalar($scalar);
     }
     if (ref \$scalar eq 'GLOB') {
 	return $scalar;
@@ -548,18 +550,14 @@ sub hash_repr {
 	     && @keys == 0
 	     && !__hashref_is_symbol_table($hashref) 
 
-	     # %{dclone $hashref}: copies the hash without
-	     #    resetting an active `each` iterator (RT#77673)
-
-	     && 100 < scalar keys %{(eval{dclone $hashref}||$hashref)}) {
+	     # use safekeys in case this DB hook is inside an `each` iterator
+	     && 100 < scalar safekeys %$hashref) {
 
 	tie %{$hashref}, 'Devel::DumpTrace::CachedDisplayedHash', %{$hashref};
 	$hash = (tied %{$hashref})->{PHASH};
     } else {
-	# %{dclone $hashref}: copy hash without resetting active `each` iterator
-	my $tmp = eval {dclone $hashref} || $hashref;
-	$hash = { map { dump_scalar($_) => dump_scalar($hashref->{$_}) }
-		  keys %$tmp };
+	# Hash::SafeKeysLLsafekeys will not reset an active `each` iterator
+	$hash = { map { dump_scalar($_) => dump_scalar($hashref->{$_}) } safekeys %$hashref };
     }
 
     my @r;
@@ -569,8 +567,8 @@ sub hash_repr {
 	    $HASH_ENTRY_SEPARATOR,
 	    $HASH_PAIR_SEPARATOR, @keys );
     } else {
-	# dclone: copy hash without resetting active `each` iterator (RT#77673)
-	@r = map { [ $_ => $hash->{$_} ] } keys %{ (eval{dclone $hash} || $hash) };
+	# safekeys does not reset an active `each` iterator (RT#77673)
+	@r = map { [ $_ => $hash->{$_} ] } safekeys %$hash;
     }
 
     if (@keys == 0 && tied(%{$hashref})
@@ -1042,7 +1040,7 @@ Devel::DumpTrace - Evaluate and print out each line before it is executed.
 
 =head1 VERSION
 
-0.16
+0.17
 
 =head1 SYNOPSIS
 
@@ -1424,15 +1422,6 @@ C<Devel::DumpTrace> requires the L<PadWalker|PadWalker>
 and L<Scalar::Util|Scalar::Util> modules.
 
 =head1 BUGS AND LIMITATIONS
-
-=head2 Known bugs
-
-B<< L<RT#77673|https://rt.cpan.org/Ticket/Display.html?id=77673> >>:
-Any programs that used the C<each %hash> construction prior to v0.16 were
-subject to entering an infinite loop. This is still an 
-issue for C<%hash> variables that contain C<GLOB> or C<CODE> values,
-including complex data structures with C<GLOB> and C<CODE> values 
-several levels deep.
 
 =head2 Parser limitations
 

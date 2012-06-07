@@ -81,6 +81,7 @@ for my $pkg (0,1,2) {
     my $c1 = system($^X, $dmodule, "-Iblib/lib", "-Ilib", "$0.pl");
     my $keep = $ENV{KEEP} || 0;
 
+    # failure point on Linux v5.8.6 - seg fault?
     ok($c1 == 0, "ran level $level") or $keep++, diag "exit code=$c1";
 
     open XH, '<', $file;

@@ -1,5 +1,8 @@
 Revision history for Devel-DumpTrace
 
+0.17    2012-06-07
+	Use Hash::SafeKeys as permanent solution to RT#77673.
+
 0.16    2012-06-06
 	RT#77673 infinite loop with PPI and each %hash construction, fixed
 	    using Storable::dclone to copy hash without resetting iterator
@@ -11,8 +14,8 @@ Revision history for Devel-DumpTrace
 	Put useful constants into separate Devel/DumpTrace/Const.pm file
 	Support for DUMPTRACE_COUNT=true to count how many times each line
 	    was executed.
-        Fixed bug that prevented DUMPTRACE_TIME from using Time::HiRes::time
-        Fixed deep recursion issue in Devel::DumpTrace::dump_scalar
+	Fixed bug that prevented DUMPTRACE_TIME from using Time::HiRes::time
+	Fixed deep recursion issue in Devel::DumpTrace::dump_scalar
 
 0.14    2011-07-14
 	Fix for t/ppi/33.t failure on some systems.

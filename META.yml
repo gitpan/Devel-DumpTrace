@@ -23,8 +23,8 @@ no_index:
     - Devel::DumpTrace::CachedDisplayedHash
     - Devel::DumpTrace::noPPI
 requires:
+  Hash::SafeKeys: 0.01
   PadWalker: 1.5
   Scalar::Util: 1.14
-  Storable: 0
   Test::More: 0
-version: 0.16
+version: 0.17

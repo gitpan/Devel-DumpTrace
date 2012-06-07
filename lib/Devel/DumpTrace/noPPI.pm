@@ -5,7 +5,7 @@ package Devel::DumpTrace::noPPI;
 
 use strict;
 use warnings;
-our $VERSION = '0.16';
+our $VERSION = '0.17';
 
 BEGIN {
   $Devel::DumpTrace::NO_PPI = 1;

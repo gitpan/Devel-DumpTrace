@@ -13,7 +13,7 @@ print T <<'EO_T;';
 
 # test program for t/84-smoke.t, t/ppi/87-smoke.t
 # assert that each %hash expression does not cause infinite loop
-%hash = (foo => 1, bar => 2, quux => 'xyz');
+%hash = (foo => 1, bar => *STDERR, baz => sub { 42 }, quux => 'xyz');
 while ( my ($k,$v) = each %hash ) {
     exit 1 if length($y) > 1000;
     $y .= "$k,$v; ";
