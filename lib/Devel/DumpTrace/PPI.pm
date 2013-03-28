@@ -27,7 +27,7 @@ eval {use PPI;
       1}
   or croak "PPI not installed. Can't use Devel::DumpTrace::PPI module";
 
-$Devel::DumpTrace::PPI::VERSION = '0.17';
+$Devel::DumpTrace::PPI::VERSION = '0.18';
 use constant ADD_IMPLICIT_ => 1;
 use constant DECORATE_FOR => 1;
 use constant DECORATE_FOREACH => 1;
@@ -1256,7 +1256,7 @@ Devel::DumpTrace::PPI - PPI-based version of Devel::DumpTrace
 
 =head1 VERSION
 
-0.17
+0.18
 
 =head1 SYNOPSIS
 
@@ -1839,7 +1839,7 @@ Marty O'Brien, E<lt>mob at cpan.orgE<gt>
 
 =head1 LICENSE AND COPYRIGHT
 
-Copyright 2010-2011 Marty O'Brien.
+Copyright 2010-2012 Marty O'Brien.
 
 This program is free software; you can redistribute it and/or modify it
 under the terms of either: the GNU General Public License as published

@@ -30,6 +30,7 @@ my $s2 = substitute('$PID',__PACKAGE__);
 ok($$ eq $s2, "\$__PKG__::PID retrieved pid $$") or diag($s2);
 ok($s1 eq $s2, "\$__PKG__::PID retrieved pid $$") or diag($s1, $s2);
 
+local $Devel::DumpTrace::HASHREPR_SORT = 1;
 my $s3 = substitute('%ERRNO', __PACKAGE__);
 my $s4 = evaluate('%','!','','','<magic>');
 ok($s3 eq "(".hash_repr(\%!).")", 'subst for %__PKG__::ERRNO')

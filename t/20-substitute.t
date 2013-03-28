@@ -43,12 +43,14 @@ foreach my $var (qw(@g @m @o)) {
   ok($xsubst eq "$var${S}(1,2,3,'bar')", "xsubst $var");
 }
 
+
+my $s1 = "('abc'=>'def';'xyz'=>[42])";
+my $s2 = "('xyz'=>[42];'abc'=>'def')";
+
 foreach my $var (qw(%g %m %o)) {
   my $subst = substitute($var, __PACKAGE__);
-  ok($subst eq "('abc'=>'def';'xyz'=>[42])"
-     || $subst eq "('xyz'=>[42];'abc'=>'def')",
-     "subst $var");
+  ok($subst eq $s1 || $subst eq $s2, "subst $var");
 
   $xsubst = xsubstitute($var, __PACKAGE__);
-  ok($xsubst eq "$var${S}$subst", "xsubst $var");
+  ok($xsubst eq "$var${S}$s1" || $xsubst eq "$var${S}$s2", "xsubst $var");
 }

@@ -1,5 +1,8 @@
 Revision history for Devel-DumpTrace
 
+0.18    2013-03-27
+	Accomodate changes in hash order in Perl >v5.17.10
+
 0.17    2012-06-07
 	Use Hash::SafeKeys as permanent solution to RT#77673.
 

@@ -47,14 +47,16 @@ foreach my $var (qw($g[1] $m[1] $o[1])) {
      "xsubst $var");
 }
 
+my $s1 = "('abc'=>'def';'xyz'=>[42]){'xyz'}";
+my $s2 = "('xyz'=>[42];'abc'=>'def'){'xyz'}";
+
 foreach my $var (qw($g{'xyz'} $m{'xyz'} $o{'xyz'})) {
   my $subst = substitute($var, __PACKAGE__);
-  ok($subst eq "('abc'=>'def';'xyz'=>[42]){'xyz'}"
-     || $subst eq "('xyz'=>[42];'abc'=>'def'){'xyz'}",
-     "subst $var");
+  ok($subst eq $s1 || $subst eq $s2, "subst $var");
 
   my $xsubst = xsubstitute($var, __PACKAGE__);
-  ok($xsubst eq substr($var,0,2) . $S . $subst, 
+  ok($xsubst eq substr($var,0,2) . $S . $s1 ||
+     $xsubst eq substr($var,0,2) . $S . $s2,
      "xsubst $var");
 }
 

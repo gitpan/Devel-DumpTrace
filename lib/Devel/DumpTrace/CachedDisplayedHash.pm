@@ -14,7 +14,7 @@ package Devel::DumpTrace::CachedDisplayedHash;
 use strict;
 use warnings;
 use Carp;
-our $VERSION = '0.17';
+our $VERSION = '0.18';
 
 *dump_scalar = \&Devel::DumpTrace::dump_scalar;
 
@@ -103,6 +103,10 @@ sub clear_cache {
 sub store_cache {
   my ($self, $key, $value) = @_;
   $self->{CACHE}{$key} = $value;
+  if ($Devel::DumpTrace::HASHREPR_SORT) {
+      my %h = @$value;
+      $value = [ map { $_ => $h{$_} } sort keys %h ];
+  }
   return;
 }
 

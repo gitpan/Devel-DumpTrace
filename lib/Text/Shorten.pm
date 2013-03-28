@@ -8,13 +8,14 @@ our @ISA = qw(Exporter);
 our @EXPORT = qw();
 our @EXPORT_OK = qw(shorten_scalar shorten_array shorten_hash);
 our %EXPORT_TAGS = (all => [ @EXPORT_OK ]);
-our $VERSION = '0.05';
+our $VERSION = '0.06';
 
 our $DOTDOTDOT = '...';
 our $DOTDOTDOT_LENGTH = length($DOTDOTDOT);
 our $DEFAULT_ARRAY_ELEM_SEPARATOR_LENGTH = 1;
 our $DEFAULT_HASH_ELEM_SEPARATOR_LENGTH = 1;
 our $DEFAULT_HASH_KEYVALUE_SEPARATOR_LENGTH = 2;
+our $HASHREPR_SORTKEYS;
 
 sub shorten_scalar {
     my ($scalar, $maxlen) = @_;
@@ -299,8 +300,12 @@ sub shorten_hash {
     }
 
     my $len = 3;
+    my @sk = safekeys %$hashkey;
+    if ($HASHREPR_SORTKEYS) {
+	@sk = sort @sk;
+    }
 
-    foreach my $key (@hashkeys, safekeys %$hashkey) {
+    foreach my $key (@hashkeys, @sk) {
 	my $dlen = $sep1 + $sep2 + length($key) + length($hash->{$key});
 	last if $len + $dlen > $maxlen
 	    && @r > 0;      # always include at least one key-value pair
@@ -320,7 +325,7 @@ Text::Shorten - Abbreviate long output
 
 =head1 VERSION
 
-0.05
+0.06
 
 =head1 SYNOPSIS
 
@@ -486,7 +491,7 @@ L<Dumpvalue> / C<dumpvars.pl>.
 
 =head1 LICENSE AND COPYRIGHT
 
-Copyright 2010-2012 Marty O'Brien.
+Copyright 2010-2013 Marty O'Brien.
 
 This program is free software; you can redistribute it and/or modify it
 under the terms of either: the GNU General Public License as published

@@ -41,7 +41,7 @@ BEGIN {
 # compile Devel::DumpTrace::Const AFTER the environment is processed
 use Devel::DumpTrace::Const;
 
-our $VERSION = '0.17';
+our $VERSION = '0.18';
 our $ARRAY_ELEM_SEPARATOR = ',';
 our $HASH_ENTRY_SEPARATOR = ';';
 our $HASH_PAIR_SEPARATOR = '=>';
@@ -543,7 +543,7 @@ sub hash_repr {
 	my $result = (tied %{$hashref})->get_cache($cache_key);
 	if (defined $result) {
 	    return $ref . join $HASH_ENTRY_SEPARATOR,
-	    map { join $HASH_PAIR_SEPARATOR, @{$_} } @{$result};
+	    map { join $HASH_PAIR_SEPARATOR, @{$_} } _condsort(@{$result});
 	}
 	$hash = (tied %{$hashref})->{PHASH};
     } elsif (!tied(%{$hashref}) 
@@ -557,18 +557,21 @@ sub hash_repr {
 	$hash = (tied %{$hashref})->{PHASH};
     } else {
 	# Hash::SafeKeysLLsafekeys will not reset an active `each` iterator
-	$hash = { map { dump_scalar($_) => dump_scalar($hashref->{$_}) } safekeys %$hashref };
+	$hash = { map { dump_scalar($_) => dump_scalar($hashref->{$_}) } 
+		  safekeys %$hashref };
     }
 
     my @r;
     if (_abbrev_style() < ABBREV_NONE) {
+	local $Text::Shortern::HASHREPR_SORTKEYS
+	    = $Devel::DumpTrace::HASHREPR_SORT;
 	@r = Text::Shorten::shorten_hash(
 	    $hash, $maxlen,
 	    $HASH_ENTRY_SEPARATOR,
 	    $HASH_PAIR_SEPARATOR, @keys );
     } else {
 	# safekeys does not reset an active `each` iterator (RT#77673)
-	@r = map { [ $_ => $hash->{$_} ] } safekeys %$hash;
+	@r = map { [ $_ => $hash->{$_} ] } _condsort(safekeys %$hash);
     }
 
     if (@keys == 0 && tied(%{$hashref})
@@ -583,9 +586,12 @@ sub hash_repr {
 
     return $ref . join ($HASH_ENTRY_SEPARATOR,
     map { join ($HASH_PAIR_SEPARATOR,
-		map{defined($_)?$_:'undef'}@{$_}) } @r);
+		map{defined($_)?$_:'undef'}@{$_}) } @r );
+}
 
-
+# sort an array iff $Devel::DumpTrace::HASHREPR_SORT is set.
+sub _condsort {
+    $Devel::DumpTrace::HASHREPR_SORT ? sort @_ : @_;
 }
 
 sub __hashref_is_symbol_table {
@@ -1040,7 +1046,7 @@ Devel::DumpTrace - Evaluate and print out each line before it is executed.
 
 =head1 VERSION
 
-0.17
+0.18
 
 =head1 SYNOPSIS
 
@@ -1578,7 +1584,7 @@ Marty O'Brien, E<lt>mob at cpan.orgE<gt>
 
 =head1 LICENSE AND COPYRIGHT
 
-Copyright 2010-2012 Marty O'Brien.
+Copyright 2010-2013 Marty O'Brien.
 
 This program is free software; you can redistribute it and/or modify it
 under the terms of either: the GNU General Public License as published

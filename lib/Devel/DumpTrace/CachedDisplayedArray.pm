@@ -14,7 +14,7 @@ package Devel::DumpTrace::CachedDisplayedArray;
 use strict;
 use warnings;
 use Carp;
-our $VERSION = '0.17';
+our $VERSION = '0.18';
 
 *dump_scalar = \&Devel::DumpTrace::dump_scalar;
 
